@@ -1,8 +1,9 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Clip, Track } from '../types/model'
 import {
-  useEditor, splitClipAt, removeClips, replaceClip, addTrack, projectDuration,
+  useEditor, splitClipAt, removeClips, replaceClip, addTrack, projectDuration, byStart,
 } from '../state/store'
+import { assetStore } from '../state/assetStore'
 import { playback } from '../engine/playback'
 import { formatTime } from '../utils/time'
 
@@ -20,7 +21,9 @@ export function Timeline() {
   const updateProject = useEditor((s) => s.updateProject)
 
   const scrollRef = useRef<HTMLDivElement>(null)
-  const duration = Math.max(projectDuration(project) + 10, 30)
+  // clamp: a corrupt/Infinity clip duration must never explode the ruler loop
+  const rawDuration = projectDuration(project)
+  const duration = Math.min(Math.max(isFinite(rawDuration) ? rawDuration + 10 : 30, 30), 4 * 3600)
 
   const timeFromEvent = (e: React.PointerEvent | React.MouseEvent) => {
     const rect = scrollRef.current!.getBoundingClientRect()
@@ -141,6 +144,12 @@ function TrackRow({ track, zoom, timeFromEvent }: {
 
 type DragMode = 'move' | 'trim-left' | 'trim-right'
 
+/** Which track kinds a clip may live on (cross-track drag). */
+function trackAccepts(clip: Clip, track: Track): boolean {
+  if (clip.kind === 'audio') return track.kind === 'audio'
+  return track.kind === 'video' || track.kind === 'overlay'
+}
+
 function ClipView({ clip, track, zoom, timeFromEvent }: {
   clip: Clip
   track: Track
@@ -151,6 +160,20 @@ function ClipView({ clip, track, zoom, timeFromEvent }: {
   const select = useEditor((s) => s.select)
   const updateProject = useEditor((s) => s.updateProject)
   const [dragging, setDragging] = useState(false)
+  const [artUrl, setArtUrl] = useState('')
+
+  // filmstrip (video) / waveform (audio) clip bodies, generated once per asset
+  const assetId = 'assetId' in clip ? clip.assetId : null
+  const asset = assetId ? useEditor.getState().project.assets[assetId] : undefined
+  useEffect(() => {
+    let alive = true
+    if (asset?.url && clip.kind === 'video') {
+      void assetStore.getFilmstrip(asset.id, asset.url, asset.duration).then((u) => { if (alive) setArtUrl(u) })
+    } else if (asset?.url && clip.kind === 'audio') {
+      void assetStore.getWaveform(asset.id).then((u) => { if (alive) setArtUrl(u) })
+    }
+    return () => { alive = false }
+  }, [asset?.id, asset?.url, clip.kind])
 
   const beginDrag = (e: React.PointerEvent, mode: DragMode) => {
     if (track.locked) return
@@ -158,6 +181,7 @@ function ClipView({ clip, track, zoom, timeFromEvent }: {
     e.preventDefault()
     select([clip.id])
     const startT = timeFromEvent(e)
+    const before = useEditor.getState().project // full snapshot = exact undo point
     const orig = { start: clip.start, duration: clip.duration, offset: 'offset' in clip ? clip.offset : 0 }
     const speed = 'speed' in clip ? clip.speed : 1
     let moved = false
@@ -184,9 +208,17 @@ function ClipView({ clip, track, zoom, timeFromEvent }: {
       return best
     }
 
+    /** Track row under the pointer (for vertical cross-track moves). */
+    const trackAt = (clientY: number): Track | null => {
+      const rows = document.querySelectorAll<HTMLElement>('.track-row')
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i].getBoundingClientRect()
+        if (clientY >= r.top && clientY < r.bottom) return useEditor.getState().project.tracks[i] ?? null
+      }
+      return null
+    }
+
     const onMove = (ev: PointerEvent) => {
-      const rect = (ev.target as HTMLElement).ownerDocument.defaultView
-      void rect
       const scroll = document.querySelector('.timeline-scroll') as HTMLDivElement
       const r = scroll.getBoundingClientRect()
       const t = Math.max(0, (ev.clientX - r.left + scroll.scrollLeft - 130) / zoom)
@@ -195,21 +227,41 @@ function ClipView({ clip, track, zoom, timeFromEvent }: {
       if (!moved) return
       setDragging(true)
 
-      updateProject((p) => replaceClip(p, clip.id, (c) => {
+      updateProject((p) => {
+        let next = replaceClip(p, clip.id, (c) => {
+          if (mode === 'move') {
+            return { ...c, start: Math.max(0, snap(orig.start + delta)) }
+          }
+          if (mode === 'trim-left') {
+            const newStart = Math.min(snap(orig.start + delta), orig.start + orig.duration - 0.1)
+            const d = newStart - orig.start
+            const trimmed = { ...c, start: Math.max(0, newStart), duration: orig.duration - d }
+            if ('offset' in trimmed) (trimmed as { offset: number }).offset = Math.max(0, orig.offset + d * speed)
+            return trimmed
+          }
+          // trim-right
+          const newEnd = Math.max(snap(orig.start + orig.duration + delta), orig.start + 0.1)
+          return { ...c, duration: newEnd - orig.start }
+        })
+
+        // vertical: move to the (compatible, unlocked) track under the pointer
         if (mode === 'move') {
-          return { ...c, start: Math.max(0, snap(orig.start + delta)) }
+          const target = trackAt(ev.clientY)
+          const holder = next.tracks.find((tr) => tr.clips.some((c) => c.id === clip.id))
+          if (target && holder && target.id !== holder.id && !target.locked && trackAccepts(clip, target)) {
+            const moving = holder.clips.find((c) => c.id === clip.id)!
+            next = {
+              ...next,
+              tracks: next.tracks.map((tr) => {
+                if (tr.id === holder.id) return { ...tr, clips: tr.clips.filter((c) => c.id !== clip.id) }
+                if (tr.id === target.id) return { ...tr, clips: [...tr.clips, moving].sort(byStart) }
+                return tr
+              }),
+            }
+          }
         }
-        if (mode === 'trim-left') {
-          const newStart = Math.min(snap(orig.start + delta), orig.start + orig.duration - 0.1)
-          const d = newStart - orig.start
-          const next = { ...c, start: Math.max(0, newStart), duration: orig.duration - d }
-          if ('offset' in next) (next as { offset: number }).offset = Math.max(0, orig.offset + d * speed)
-          return next
-        }
-        // trim-right
-        const newEnd = Math.max(snap(orig.start + orig.duration + delta), orig.start + 0.1)
-        return { ...c, duration: newEnd - orig.start }
-      }), { transient: true })
+        return next
+      }, { transient: true })
     }
 
     const onUp = () => {
@@ -217,17 +269,16 @@ function ClipView({ clip, track, zoom, timeFromEvent }: {
       window.removeEventListener('pointerup', onUp)
       setDragging(false)
       if (moved) {
-        // commit once to history: transient edits already applied; push an undo point
+        // one undo step for the whole gesture — restores position AND track
         const s = useEditor.getState()
-        useEditor.setState({ past: [...s.past, restoreOriginal(s.project, clip.id, orig, clip)].slice(-100), future: [] })
+        useEditor.setState({ past: [...s.past, before].slice(-100), future: [] })
       }
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
   }
 
-  const asset = 'assetId' in clip ? useEditor.getState().project.assets[clip.assetId] : undefined
-
+  const isWave = clip.kind === 'audio'
   return (
     <div
       className={`clip kind-${clip.kind} ${selected ? 'selected' : ''}`}
@@ -235,21 +286,15 @@ function ClipView({ clip, track, zoom, timeFromEvent }: {
       onPointerDown={(e) => beginDrag(e, 'move')}
       onClick={(e) => { e.stopPropagation(); select([clip.id]) }}
     >
-      {asset?.thumbnail && <div className="thumb" style={{ backgroundImage: `url(${asset.thumbnail})` }} />}
+      {artUrl ? (
+        <div className={`thumb ${isWave ? 'wave' : ''}`} style={{ backgroundImage: `url(${artUrl})` }} />
+      ) : asset?.thumbnail ? (
+        <div className="thumb" style={{ backgroundImage: `url(${asset.thumbnail})` }} />
+      ) : null}
       <span className="label">{clip.name}</span>
       {clip.transition && <div className="transition-badge" title={`Transition: ${clip.transition.type}`} />}
       <div className="handle left" onPointerDown={(e) => beginDrag(e, 'trim-left')} />
       <div className="handle right" onPointerDown={(e) => beginDrag(e, 'trim-right')} />
     </div>
   )
-}
-
-/** Reconstruct the pre-drag project so undo lands on the original layout. */
-function restoreOriginal(
-  current: ReturnType<typeof useEditor.getState>['project'],
-  clipId: string,
-  orig: { start: number; duration: number; offset: number },
-  clipBefore: Clip,
-) {
-  return replaceClip(current, clipId, () => structuredClone(clipBefore))
 }

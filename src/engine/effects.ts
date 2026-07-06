@@ -39,6 +39,7 @@ function isPixelEffect(t: Effect['type']): boolean {
 /** Apply pixel-level effects in place on a canvas. `time` drives animated effects. */
 export function applyPixelEffects(canvas: HTMLCanvasElement | OffscreenCanvas, effects: Effect[], time: number) {
   const ctx = canvas.getContext('2d') as CanvasRenderingContext2D
+  ctx.setTransform(1, 0, 0, 1, 0, 0) // pixel ops address raw device pixels
   for (const e of effects) {
     if (!e.enabled || !isPixelEffect(e.type)) continue
     switch (e.type) {

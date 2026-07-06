@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
-import { useEditor, type PanelTab } from './state/store'
-import { autosave } from './state/persistence'
+import { useEditor, projectDuration, type PanelTab } from './state/store'
+import { autosave, loadAutosave } from './state/persistence'
 import { TopBar } from './components/TopBar'
 import { Preview } from './components/Preview'
 import { Timeline } from './components/Timeline'
@@ -13,6 +13,8 @@ import { AIPanel } from './components/panels/AIPanel'
 import { ScriptPanel } from './components/panels/ScriptPanel'
 import { ExportDialog } from './components/ExportDialog'
 import { useShortcuts } from './hooks/useShortcuts'
+
+let restoredOnce = false
 
 const TABS: { id: PanelTab; icon: string; label: string }[] = [
   { id: 'media', icon: '🎬', label: 'Media' },
@@ -30,6 +32,18 @@ export function App() {
   const project = useEditor((s) => s.project)
 
   useShortcuts()
+
+  // restore the last session once on boot (media re-links by filename on import)
+  useEffect(() => {
+    if (restoredOnce) return
+    restoredOnce = true
+    const s = useEditor.getState()
+    const saved = loadAutosave()
+    const currentEmpty = projectDuration(s.project) === 0 && Object.keys(s.project.assets).length === 0
+    if (saved && currentEmpty && (projectDuration(saved) > 0 || Object.keys(saved.assets).length > 0)) {
+      s.replaceProject(saved)
+    }
+  }, [])
 
   // debounced autosave
   useEffect(() => {

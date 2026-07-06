@@ -11,8 +11,14 @@ import { ease } from './keyframes'
  * the same (project, t, frames) always draws the same image, so the realtime
  * preview and the frame-exact exporter share this code path.
  *
+ * All layout happens in PROJECT coordinates; `scale` maps them to device
+ * pixels. The preview passes its display scale (rendering only the pixels it
+ * shows), the exporter passes outputSize/projectSize (letterboxed via ox/oy
+ * when aspect differs) — so text, charts, and keyframes lay out identically
+ * at every output resolution.
+ *
  * Video pixels come from a FrameProvider: the preview hands over live <video>
- * elements; the exporter hands over precisely-seeked ones.
+ * elements; the exporter hands over precisely-decoded frames.
  */
 export interface FrameProvider {
   getVideoFrame(clip: VideoClip, sourceTime: number): CanvasImageSource | null
@@ -38,50 +44,70 @@ export function clipSourceTime(clip: VideoClip, timelineTime: number): number {
   return clip.offset + (timelineTime - clip.start) * clip.speed
 }
 
-export function renderFrame(ctx: CanvasRenderingContext2D, project: Project, t: number, frames: FrameProvider) {
+export function renderFrame(
+  ctx: CanvasRenderingContext2D,
+  project: Project,
+  t: number,
+  frames: FrameProvider,
+  scale = 1,
+  ox = 0,
+  oy = 0,
+) {
   const { width: W, height: H } = project
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.fillStyle = '#000'
-  ctx.fillRect(0, 0, W, H)
+  ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height)
+  ctx.setTransform(scale, 0, 0, scale, ox, oy)
 
   // Bottom-up: tracks array is top-first, so iterate in reverse. Audio never draws.
+  // ALL clips active at t on a track render, stacked in start order (later on
+  // top) — overlapping overlays coexist rather than eclipsing each other.
   let scratchIdx = 0
   for (let ti = project.tracks.length - 1; ti >= 0; ti--) {
     const track = project.tracks[ti]
     if (track.kind === 'audio' || track.hidden) continue
 
-    const active = track.clips.find((c) => t >= c.start && t < c.start + c.duration)
-    const { outgoing, transition, transP } = findTransition(track, t)
+    const actives = track.clips.filter((c) => t >= c.start && t < c.start + c.duration)
+    const trans = findTransition(track, t)
 
-    if (outgoing && transition && active && outgoing.id !== active.id) {
+    if (trans) {
       // outgoing clip frozen at its final frame as the base layer
-      const outLayer = renderClipLayer(project, outgoing, outgoing.duration - 0.001 + outgoing.start, frames, getScratch(W, H, scratchIdx++), t)
-      if (outLayer) ctx.drawImage(outLayer, 0, 0)
-      const inLayer = renderClipLayer(project, active, t, frames, getScratch(W, H, scratchIdx++), t)
-      if (inLayer) drawTransition(ctx, inLayer, transition.type, transP, W, H)
-      continue
+      const outLayer = renderClipLayer(project, trans.outgoing, trans.outgoing.start + trans.outgoing.duration - 0.001, frames, getScratch(sw(W, scale), sw(H, scale), scratchIdx++), t, scale)
+      if (outLayer) ctx.drawImage(outLayer, 0, 0, W, H)
+      const inLayer = renderClipLayer(project, trans.incoming, t, frames, getScratch(sw(W, scale), sw(H, scale), scratchIdx++), t, scale)
+      if (inLayer) drawTransition(ctx, inLayer, trans.transition.type, trans.transP, W, H)
     }
 
-    if (active) {
-      const layer = renderClipLayer(project, active, t, frames, getScratch(W, H, scratchIdx++), t)
-      if (layer) ctx.drawImage(layer, 0, 0)
+    for (const clip of actives) {
+      if (trans && clip.id === trans.incoming.id) continue // already drawn via the transition
+      const layer = renderClipLayer(project, clip, t, frames, getScratch(sw(W, scale), sw(H, scale), scratchIdx++), t, scale)
+      if (layer) ctx.drawImage(layer, 0, 0, W, H)
     }
   }
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
 }
 
-function findTransition(track: Track, t: number): { outgoing: Clip | null; transition: Clip['transition']; transP: number } {
+function sw(v: number, scale: number): number {
+  return Math.max(1, Math.round(v * scale))
+}
+
+function findTransition(
+  track: Track,
+  t: number,
+): { outgoing: Clip; incoming: Clip; transition: NonNullable<Clip['transition']>; transP: number } | null {
   for (let i = 0; i < track.clips.length - 1; i++) {
     const a = track.clips[i]
     const b = track.clips[i + 1]
     if (!a.transition) continue
     const boundaryOk = Math.abs(a.start + a.duration - b.start) < 0.05
     if (boundaryOk && t >= b.start && t < b.start + a.transition.duration) {
-      return { outgoing: a, transition: a.transition, transP: (t - b.start) / a.transition.duration }
+      return { outgoing: a, incoming: b, transition: a.transition, transP: (t - b.start) / a.transition.duration }
     }
   }
-  return { outgoing: null, transition: undefined, transP: 0 }
+  return null
 }
 
-/** Draw one clip (with transform + effects) onto its own full-size layer. */
+/** Draw one clip (with transform + effects) onto its own layer (device px = project px × scale). */
 function renderClipLayer(
   project: Project,
   clip: Clip,
@@ -89,25 +115,27 @@ function renderClipLayer(
   frames: FrameProvider,
   layer: HTMLCanvasElement,
   wallT: number,
+  scale: number,
 ): HTMLCanvasElement | null {
   const { width: W, height: H } = project
   const local = t - clip.start
   const ctx = layer.getContext('2d')!
   ctx.setTransform(1, 0, 0, 1, 0, 0)
-  ctx.clearRect(0, 0, W, H)
+  ctx.clearRect(0, 0, layer.width, layer.height)
+  ctx.setTransform(scale, 0, 0, scale, 0, 0)
 
   const x = sampleKeyframes(clip.transform.x, local)
   const y = sampleKeyframes(clip.transform.y, local)
-  const scale = sampleKeyframes(clip.transform.scale, local)
+  const scl = sampleKeyframes(clip.transform.scale, local)
   const rotation = sampleKeyframes(clip.transform.rotation, local)
   const opacity = sampleKeyframes(clip.transform.opacity, local)
-  if (opacity <= 0 || scale === 0) return null
+  if (opacity <= 0 || scl === 0) return null
 
   ctx.save()
   ctx.globalAlpha = opacity
   ctx.translate(W / 2 + x, H / 2 + y)
   ctx.rotate((rotation * Math.PI) / 180)
-  ctx.scale(scale, scale)
+  ctx.scale(scl, scl)
   ctx.translate(-W / 2, -H / 2)
   ctx.filter = filterString(clip.effects)
 

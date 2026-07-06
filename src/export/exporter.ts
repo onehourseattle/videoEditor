@@ -21,10 +21,50 @@ export interface ExportProgress {
 
 const AUDIO_SAMPLE_RATE = 48000
 
+type MuxVideoCodec = 'avc' | 'hevc' | 'vp9' | 'av1'
+
+/** First hardware/software codec this browser can actually encode, best first. */
+async function pickVideoCodec(s: ExportSettings): Promise<{ mux: MuxVideoCodec; codec: string }> {
+  const mbps = (s.width * s.height * s.fps) / 256
+  const avcLevel = mbps > 983040 ? '33' : '2a'
+  const candidates: { mux: MuxVideoCodec; codec: string }[] = [
+    { mux: 'avc', codec: `avc1.6400${avcLevel}` }, // H.264 High
+    { mux: 'avc', codec: `avc1.4200${avcLevel}` }, // H.264 Baseline
+    { mux: 'vp9', codec: 'vp09.00.41.08' },
+    { mux: 'av1', codec: 'av01.0.08M.08' },
+  ]
+  for (const c of candidates) {
+    try {
+      const res = await VideoEncoder.isConfigSupported({
+        codec: c.codec, width: s.width, height: s.height, bitrate: s.videoBitrate, framerate: s.fps,
+      })
+      if (res.supported) return c
+    } catch { /* try next */ }
+  }
+  throw new Error('No supported video encoder found in this browser.')
+}
+
+async function pickAudioCodec(): Promise<{ mux: 'aac' | 'opus'; codec: string } | null> {
+  if (typeof AudioEncoder === 'undefined') return null
+  const candidates = [
+    { mux: 'aac' as const, codec: 'mp4a.40.2' },
+    { mux: 'opus' as const, codec: 'opus' },
+  ]
+  for (const c of candidates) {
+    try {
+      const res = await AudioEncoder.isConfigSupported({ codec: c.codec, sampleRate: AUDIO_SAMPLE_RATE, numberOfChannels: 2, bitrate: 192_000 })
+      if (res.supported) return c
+    } catch { /* try next */ }
+  }
+  return null
+}
+
 /**
- * Fully local MP4 export. Video: each output frame is composited on canvas from
- * precisely-seeked <video> elements, then encoded with WebCodecs H.264.
- * Audio: the whole mix is rendered by an OfflineAudioContext, then AAC-encoded.
+ * Fully local MP4 export. Video frames are decoded sequentially with
+ * WebCodecs (mediabunny demuxer) — no per-frame <video> seeking — composited
+ * through the same renderFrame() the preview uses, and re-encoded (H.264
+ * preferred, VP9/AV1 fallback). Audio: the whole mix is rendered by an
+ * OfflineAudioContext, then AAC/Opus-encoded.
  */
 export async function exportProject(
   project: Project,
@@ -39,23 +79,26 @@ export async function exportProject(
   const duration = projectDuration(project)
   if (duration <= 0) throw new Error('Project is empty — add clips to the timeline first.')
 
-  const target = new ArrayBufferTarget()
+  const videoCodec = await pickVideoCodec(settings)
 
   // ── audio mix (offline render) ──
   let audioBuffer: AudioBuffer | null = null
-  if (settings.includeAudio) {
+  const audioCodec = settings.includeAudio ? await pickAudioCodec() : null
+  if (settings.includeAudio && audioCodec) {
     onProgress({ phase: 'audio', progress: 0 })
     const offline = new OfflineAudioContext(2, Math.ceil(duration * AUDIO_SAMPLE_RATE), AUDIO_SAMPLE_RATE)
     await scheduleAudio(offline, offline.destination, project, 0, 0)
     audioBuffer = await offline.startRendering()
     onProgress({ phase: 'audio', progress: 1 })
   }
-  const hasAudio = !!audioBuffer && typeof AudioEncoder !== 'undefined'
 
+  const target = new ArrayBufferTarget()
   const muxer = new Muxer({
     target,
-    video: { codec: 'avc', width: settings.width, height: settings.height },
-    audio: hasAudio ? { codec: 'aac', sampleRate: AUDIO_SAMPLE_RATE, numberOfChannels: 2 } : undefined,
+    video: { codec: videoCodec.mux, width: settings.width, height: settings.height },
+    audio: audioBuffer && audioCodec
+      ? { codec: audioCodec.mux, sampleRate: AUDIO_SAMPLE_RATE, numberOfChannels: 2 }
+      : undefined,
     fastStart: 'in-memory',
   })
 
@@ -66,15 +109,19 @@ export async function exportProject(
     error: (e) => { encodeError = e instanceof Error ? e : new Error(String(e)) },
   })
   videoEncoder.configure({
-    codec: pickAvcCodec(settings.width, settings.height, settings.fps),
+    codec: videoCodec.codec,
     width: settings.width,
     height: settings.height,
     bitrate: settings.videoBitrate,
     framerate: settings.fps,
   })
 
-  // render at export resolution (project aspect is preserved by the compositor)
-  const exportProject_: Project = { ...project, width: settings.width, height: settings.height }
+  // Layout stays in project coordinates at every output size; letterbox on
+  // aspect mismatch instead of re-flowing (what you previewed is what you get).
+  const scale = Math.min(settings.width / project.width, settings.height / project.height)
+  const ox = (settings.width - project.width * scale) / 2
+  const oy = (settings.height - project.height * scale) / 2
+
   const canvas = document.createElement('canvas')
   canvas.width = settings.width
   canvas.height = settings.height
@@ -84,31 +131,33 @@ export async function exportProject(
   const totalFrames = Math.ceil(duration * settings.fps)
 
   onProgress({ phase: 'video', progress: 0 })
-  for (let i = 0; i < totalFrames; i++) {
-    if (signal?.cancelled) {
-      videoEncoder.close()
-      frames.dispose()
-      throw new Error('Export cancelled')
-    }
-    if (encodeError) throw encodeError
-    const t = i / settings.fps
-    await frames.prepare(exportProject_, t)
-    renderFrame(ctx, exportProject_, t, frames)
+  try {
+    for (let i = 0; i < totalFrames; i++) {
+      if (signal?.cancelled) throw new Error('Export cancelled')
+      if (encodeError) throw encodeError
+      const t = i / settings.fps
+      await frames.prepare(t)
+      renderFrame(ctx, project, t, frames, scale, ox, oy)
 
-    const frame = new VideoFrame(canvas, { timestamp: Math.round(t * 1e6), duration: Math.round(1e6 / settings.fps) })
-    videoEncoder.encode(frame, { keyFrame: i % (settings.fps * 2) === 0 })
-    frame.close()
-    // keep encoder queue bounded
-    if (videoEncoder.encodeQueueSize > 8) await new Promise((r) => setTimeout(r, 10))
-    if (i % 5 === 0) onProgress({ phase: 'video', progress: i / totalFrames })
+      const frame = new VideoFrame(canvas, { timestamp: Math.round(t * 1e6), duration: Math.round(1e6 / settings.fps) })
+      videoEncoder.encode(frame, { keyFrame: i % (settings.fps * 2) === 0 })
+      frame.close()
+      // keep encoder queue bounded
+      while (videoEncoder.encodeQueueSize > 8) await new Promise((r) => setTimeout(r, 5))
+      if (i % 5 === 0) onProgress({ phase: 'video', progress: i / totalFrames })
+    }
+    await videoEncoder.flush()
+  } catch (e) {
+    try { videoEncoder.close() } catch { /* already closed */ }
+    throw e
+  } finally {
+    await frames.dispose()
   }
-  await videoEncoder.flush()
-  frames.dispose()
 
   // ── audio encode ──
-  if (hasAudio && audioBuffer) {
+  if (audioBuffer && audioCodec) {
     onProgress({ phase: 'muxing', progress: 0.2 })
-    await encodeAudio(audioBuffer, (chunk, meta) => muxer.addAudioChunk(chunk, meta))
+    await encodeAudio(audioBuffer, audioCodec.codec, (chunk, meta) => muxer.addAudioChunk(chunk, meta))
   }
 
   onProgress({ phase: 'muxing', progress: 0.8 })
@@ -117,15 +166,9 @@ export async function exportProject(
   return new Blob([target.buffer], { type: 'video/mp4' })
 }
 
-function pickAvcCodec(w: number, h: number, fps: number): string {
-  // High profile, level chosen for resolution (5.1 covers 1080p60 / 4K30)
-  const mbps = (w * h * fps) / 256
-  const level = mbps > 983040 ? '33' : '2a'
-  return `avc1.6400${level}`
-}
-
 async function encodeAudio(
   buffer: AudioBuffer,
+  codec: string,
   emit: (chunk: EncodedAudioChunk, meta?: EncodedAudioChunkMetadata) => void,
 ) {
   let err: Error | null = null
@@ -133,7 +176,7 @@ async function encodeAudio(
     output: emit,
     error: (e) => { err = e instanceof Error ? e : new Error(String(e)) },
   })
-  encoder.configure({ codec: 'mp4a.40.2', sampleRate: buffer.sampleRate, numberOfChannels: 2, bitrate: 192_000 })
+  encoder.configure({ codec, sampleRate: buffer.sampleRate, numberOfChannels: 2, bitrate: 192_000 })
 
   const chunkFrames = 4800 // 0.1s per AudioData
   const left = buffer.getChannelData(0)
@@ -161,61 +204,171 @@ async function encodeAudio(
   encoder.close()
 }
 
+// ─── frame provider ──────────────────────────────────────────────────────────
+
+interface ClipReader {
+  /** sequential WebCodecs decode via mediabunny — the fast path */
+  iter: AsyncGenerator<{ canvas: CanvasImageSource; timestamp: number }, void, unknown> | null
+  current: { canvas: CanvasImageSource; timestamp: number } | null
+  next: { canvas: CanvasImageSource; timestamp: number } | null
+  done: boolean
+  /** seek-based <video> fallback for containers/codecs WebCodecs can't decode */
+  fallbackVideo: HTMLVideoElement | null
+}
+
 /**
- * Frame provider for export: owns dedicated <video> elements and seeks them to
- * the exact source time for each output frame before the compositor draws.
+ * Per-clip sequential decoders. Because export time only moves forward, each
+ * clip is one forward pass through its source — every packet decoded at most
+ * once. Falls back to precise <video> seeking per asset when the container
+ * isn't demuxable (rare).
  */
 class ExportFrameProvider implements FrameProvider {
-  private videos = new Map<string, HTMLVideoElement>()
+  private readers = new Map<string, ClipReader>()
+  private sinks = new Map<string, Promise<unknown | null>>() // assetId → CanvasSink | null
+  private inputs: { dispose?: () => void }[] = []
+  private fallbackAssets = new Set<string>()
 
-  constructor(private sourceProject: Project) {}
+  constructor(private project: Project) {}
 
-  async prepare(project: Project, t: number) {
-    const jobs: Promise<void>[] = []
-    for (const track of project.tracks) {
+  /** CanvasSink per asset (null = not decodable → use fallback). */
+  private getSink(assetId: string): Promise<unknown | null> {
+    let sink = this.sinks.get(assetId)
+    if (!sink) {
+      sink = (async () => {
+        const blob = assetStore.getBlob(assetId)
+        if (!blob) return null
+        try {
+          const { Input, BlobSource, ALL_FORMATS, CanvasSink } = await import('mediabunny')
+          const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS })
+          this.inputs.push(input as unknown as { dispose?: () => void })
+          const track = await input.getPrimaryVideoTrack()
+          if (!track || !(await track.canDecode())) return null
+          return new CanvasSink(track, { poolSize: 2 })
+        } catch {
+          return null
+        }
+      })()
+      this.sinks.set(assetId, sink)
+    }
+    return sink
+  }
+
+  async prepare(t: number) {
+    const active: { clip: VideoClip; want: number }[] = []
+    for (const track of this.project.tracks) {
       if (track.hidden) continue
       for (const clip of track.clips) {
         if (clip.kind !== 'video') continue
         // include clips in transition windows (they render slightly out of range)
         if (t < clip.start - 1 || t >= clip.start + clip.duration + 1) continue
-        const asset = this.sourceProject.assets[clip.assetId]
+        const asset = this.project.assets[clip.assetId]
         if (!asset?.url) continue
-        let v = this.videos.get(clip.assetId)
-        if (!v) {
-          v = assetStore.createExportVideo(clip.assetId, asset.url)
-          this.videos.set(clip.assetId, v)
-        }
-        const want = Math.min(Math.max(0, clipSourceTime(clip, Math.min(Math.max(t, clip.start), clip.start + clip.duration))), (asset.duration || 1) - 0.001)
-        if (Math.abs(v.currentTime - want) > 1 / 240) {
-          jobs.push(seekTo(v, want))
+        const clamped = Math.min(Math.max(t, clip.start), clip.start + clip.duration - 0.001)
+        const want = Math.min(Math.max(0, clipSourceTime(clip, clamped)), (asset.duration || 1) - 0.001)
+        active.push({ clip, want })
+      }
+    }
+
+    await Promise.all(active.map(({ clip, want }) => this.advance(clip, want)))
+
+    // release readers for clips we've moved past
+    for (const [clipId, reader] of this.readers) {
+      const stillActive = active.some((a) => a.clip.id === clipId)
+      if (!stillActive) {
+        void reader.iter?.return?.()
+        reader.fallbackVideo?.removeAttribute('src')
+        this.readers.delete(clipId)
+      }
+    }
+  }
+
+  private async advance(clip: VideoClip, want: number) {
+    let reader = this.readers.get(clip.id)
+    if (!reader) {
+      reader = { iter: null, current: null, next: null, done: false, fallbackVideo: null }
+      this.readers.set(clip.id, reader)
+      if (!this.fallbackAssets.has(clip.assetId)) {
+        const sink = (await this.getSink(clip.assetId)) as {
+          canvases: (from?: number, to?: number) => AsyncGenerator<{ canvas: CanvasImageSource; timestamp: number }, void, unknown>
+        } | null
+        if (sink) {
+          const from = Math.max(0, clip.offset)
+          const to = clip.offset + clip.duration * clip.speed + 0.5
+          reader.iter = sink.canvases(from, to)
+        } else {
+          this.fallbackAssets.add(clip.assetId)
         }
       }
     }
-    await Promise.all(jobs)
+
+    if (reader.iter) {
+      try {
+        // pull frames forward until `next` is beyond the wanted time
+        if (!reader.next && !reader.done) {
+          const r = await reader.iter.next()
+          if (r.done) reader.done = true
+          else reader.next = r.value
+        }
+        while (reader.next && reader.next.timestamp <= want) {
+          reader.current = reader.next
+          const r = await reader.iter.next()
+          if (r.done) { reader.done = true; reader.next = null } else reader.next = r.value
+        }
+        if (!reader.current && reader.next) reader.current = reader.next // first frame starts past `want`
+        return
+      } catch {
+        // decoder blew up mid-stream — drop to the <video> fallback
+        reader.iter = null
+        reader.current = null
+        this.fallbackAssets.add(clip.assetId)
+      }
+    }
+
+    // fallback: precise-seek a dedicated <video>
+    const asset = this.project.assets[clip.assetId]
+    if (!asset?.url) return
+    if (!reader.fallbackVideo) {
+      reader.fallbackVideo = assetStore.createExportVideo(clip.assetId, asset.url)
+      await waitEvent(reader.fallbackVideo, 'loadeddata', 5000)
+    }
+    const v = reader.fallbackVideo
+    if (Math.abs(v.currentTime - want) > 1 / 240) {
+      v.currentTime = want
+      await waitEvent(v, 'seeked', 500)
+    }
   }
 
   getVideoFrame(clip: VideoClip): CanvasImageSource | null {
-    const v = this.videos.get(clip.assetId)
-    return v && v.readyState >= 2 ? v : null
+    const reader = this.readers.get(clip.id)
+    if (!reader) return null
+    if (reader.current) return reader.current.canvas
+    if (reader.fallbackVideo && reader.fallbackVideo.readyState >= 2) return reader.fallbackVideo
+    return null
   }
 
   getImage(assetId: string): CanvasImageSource | null {
     return assetStore.getImage(assetId) ?? null
   }
 
-  dispose() {
-    for (const v of this.videos.values()) v.removeAttribute('src')
-    this.videos.clear()
+  async dispose() {
+    for (const reader of this.readers.values()) {
+      void reader.iter?.return?.()
+      reader.fallbackVideo?.removeAttribute('src')
+    }
+    this.readers.clear()
+    for (const input of this.inputs) {
+      try { input.dispose?.() } catch { /* best effort */ }
+    }
+    this.inputs = []
   }
 }
 
-function seekTo(v: HTMLVideoElement, t: number): Promise<void> {
+function waitEvent(el: EventTarget, event: string, timeout: number): Promise<void> {
   return new Promise((resolve) => {
-    const done = () => { v.removeEventListener('seeked', done); resolve() }
-    v.addEventListener('seeked', done)
-    v.currentTime = t
-    // safety: some containers fire no 'seeked' for sub-frame moves
-    setTimeout(done, 500)
+    let done = false
+    const finish = () => { if (!done) { done = true; el.removeEventListener(event, finish); resolve() } }
+    el.addEventListener(event, finish, { once: true })
+    setTimeout(finish, timeout)
   })
 }
 

@@ -91,7 +91,8 @@ interface DrawOpts {
 
 function revealCount(animation: TextClip['animation'], total: number, progress: number): number {
   if (animation === 'typewriter' || animation === 'waveIn' || animation === 'wordPop') {
-    return Math.ceil(total * ease('easeOut', progress))
+    // at least one word from the very first frame — a blank pop-in reads as a glitch
+    return Math.max(1, Math.ceil(total * ease('easeOut', progress)))
   }
   return total
 }
