@@ -1,0 +1,36 @@
+{
+  "name": "cutroom",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CutRoom — a fully local, AI-powered social media video editing platform. No cloud, no API calls.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "fetch-models": "node scripts/fetch-models.mjs",
+    "gen-icons": "node scripts/gen-icons.mjs",
+    "dev:lan": "vite --host",
+    "ios:init": "npm run build && npx cap add ios && npx cap sync ios",
+    "ios:sync": "npm run build && npx cap sync ios",
+    "ios:open": "npx cap open ios"
+  },
+  "dependencies": {
+    "@capacitor/core": "^8.4.1",
+    "@capacitor/ios": "^8.4.1",
+    "@huggingface/transformers": "^3.3.1",
+    "mp4-muxer": "^5.1.5",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zustand": "^5.0.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.4.1",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7"
+  }
+}
