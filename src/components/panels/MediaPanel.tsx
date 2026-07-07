@@ -1,15 +1,15 @@
 import { useRef, useState } from 'react'
-import type { AudioClip, VideoClip, ImageClip, AssetMeta } from '../../types/model'
-import { defaultTransform } from '../../types/model'
-import { useEditor, addClipToTrack, projectDuration } from '../../state/store'
+import type { AssetMeta } from '../../types/model'
+import { useEditor, addClipToTrack } from '../../state/store'
 import { assetStore } from '../../state/assetStore'
-import { uid } from '../../utils/id'
+import { makeClipFromAsset, trackAccepts, ASSET_DRAG_MIME } from '../../state/clipFactory'
 import { formatTime } from '../../utils/time'
 
 export function MediaPanel() {
   const project = useEditor((s) => s.project)
   const updateProject = useEditor((s) => s.updateProject)
   const setBusy = useEditor((s) => s.setBusy)
+  const toast = useEditor((s) => s.toast)
   const fileRef = useRef<HTMLInputElement>(null)
   const [over, setOver] = useState(false)
 
@@ -18,54 +18,35 @@ export function MediaPanel() {
       try {
         setBusy(`Importing ${file.name}…`)
         // re-link: if a project asset with the same name is missing its URL, adopt it
-        const orphan = Object.values(project.assets).find((a) => a.name === file.name && !a.url)
+        const orphan = Object.values(useEditor.getState().project.assets).find((a) => a.name === file.name && !a.url)
         const meta = await assetStore.importFile(file)
         if (orphan) {
           const relinked: AssetMeta = { ...meta, id: orphan.id }
           updateProject((p) => ({ ...p, assets: { ...p.assets, [orphan.id]: relinked } }))
+          toast(`Re-linked ${file.name}`, 'ok')
         } else {
           updateProject((p) => ({ ...p, assets: { ...p.assets, [meta.id]: meta } }))
         }
       } catch (e) {
-        alert(`Could not import ${file.name}: ${e instanceof Error ? e.message : e}`)
+        toast(`Could not import ${file.name}: ${e instanceof Error ? e.message : e}`, 'error')
       } finally {
         setBusy(null)
       }
     }
   }
 
+  /** Click: append after the last clip on the first compatible track. */
   const addToTimeline = (asset: AssetMeta) => {
     const p = useEditor.getState().project
-    const at = projectDuration(p)
-    if (asset.type === 'audio') {
-      const track = p.tracks.find((t) => t.kind === 'audio')
-      if (!track) return
-      const clip: AudioClip = {
-        id: uid('clip'), kind: 'audio', assetId: asset.id, name: asset.name,
-        start: 0, duration: asset.duration, offset: 0, speed: 1, volume: 1, muted: false,
-        fadeIn: 0, fadeOut: 0, transform: defaultTransform(), effects: [],
-      }
-      updateProject((pr) => addClipToTrack(pr, track.id, clip))
+    const clip = makeClipFromAsset(asset, 0)
+    const track = p.tracks.find((t) => trackAccepts(clip, t) && !t.locked)
+    if (!track) {
+      toast('No unlocked compatible track for this media', 'error')
       return
     }
-    const track = p.tracks.find((t) => t.kind === 'video')
-    if (!track) return
-    const end = track.clips.reduce((acc, c) => Math.max(acc, c.start + c.duration), 0)
-    void at
-    if (asset.type === 'video') {
-      const clip: VideoClip = {
-        id: uid('clip'), kind: 'video', assetId: asset.id, name: asset.name,
-        start: end, duration: asset.duration, offset: 0, speed: 1, volume: 1, muted: false,
-        transform: defaultTransform(), effects: [],
-      }
-      updateProject((pr) => addClipToTrack(pr, track.id, clip))
-    } else {
-      const clip: ImageClip = {
-        id: uid('clip'), kind: 'image', assetId: asset.id, name: asset.name,
-        start: end, duration: 4, transform: defaultTransform(), effects: [],
-      }
-      updateProject((pr) => addClipToTrack(pr, track.id, clip))
-    }
+    clip.start = track.clips.reduce((acc, c) => Math.max(acc, c.start + c.duration), 0)
+    updateProject((pr) => addClipToTrack(pr, track.id, clip))
+    toast(`Added to ${track.name} — or drag items straight onto the timeline`, 'ok')
   }
 
   const assets = Object.values(project.assets)
@@ -91,7 +72,17 @@ export function MediaPanel() {
       {assets.length > 0 && (
         <div className="media-grid">
           {assets.map((a) => (
-            <div key={a.id} className="media-item" onClick={() => addToTimeline(a)} title="Click to add to timeline">
+            <div
+              key={a.id}
+              className="media-item"
+              draggable={!!a.url}
+              onDragStart={(e) => {
+                e.dataTransfer.setData(ASSET_DRAG_MIME, a.id)
+                e.dataTransfer.effectAllowed = 'copy'
+              }}
+              onClick={() => addToTimeline(a)}
+              title="Click to append, or drag onto the timeline"
+            >
               {a.thumbnail ? (
                 <img src={a.thumbnail} alt="" />
               ) : (

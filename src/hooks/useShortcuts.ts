@@ -51,6 +51,13 @@ export function useShortcuts() {
         playback.seek(s.currentTime + (e.key === 'ArrowLeft' ? -step : step))
       } else if (e.key === 'Home') {
         playback.seek(0)
+      } else if (e.key === '?') {
+        e.preventDefault()
+        s.setHelpOpen(!s.helpOpen)
+      } else if (e.key === 'Escape') {
+        if (s.helpOpen) s.setHelpOpen(false)
+        else if (s.exportOpen) s.setExportOpen(false)
+        else s.select([])
       }
     }
     window.addEventListener('keydown', onKey)

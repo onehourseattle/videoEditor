@@ -10,6 +10,7 @@ import { createScriptApi } from '../../scripting/api'
  */
 export function AIPanel() {
   const setBusy = useEditor((s) => s.setBusy)
+  const toast = useEditor((s) => s.toast)
   const [log, setLog] = useState<string[]>([])
 
   const targetClip = () => {
@@ -26,7 +27,7 @@ export function AIPanel() {
     return async () => {
       const clip = targetClip()
       if (!clip) {
-        alert('Add a video clip to the timeline first (Media panel).')
+        toast('Add a video clip to the timeline first (Media panel)', 'error')
         return
       }
       const api = createScriptApi((msg) => {
@@ -37,10 +38,11 @@ export function AIPanel() {
       try {
         await fn(api, clip.id)
         setLog((l) => [...l.slice(-30), `✓ ${label} done`])
+        toast(`${label} done`, 'ok')
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
         setLog((l) => [...l.slice(-30), `✗ ${label}: ${msg}`])
-        alert(`${label} failed: ${msg}`)
+        toast(`${label} failed: ${msg}`, 'error')
       } finally {
         setBusy(null)
       }

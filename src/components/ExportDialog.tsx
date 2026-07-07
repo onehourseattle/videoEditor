@@ -1,12 +1,22 @@
 import { useRef, useState } from 'react'
-import { useEditor } from '../state/store'
+import { useEditor, projectDuration } from '../state/store'
 import { exportProject, EXPORT_PRESETS, type ExportProgress } from '../export/exporter'
 import { playback } from '../engine/playback'
+
+const PRESET_KEY = 'cutroom.exportPreset'
 
 export function ExportDialog() {
   const project = useEditor((s) => s.project)
   const setExportOpen = useEditor((s) => s.setExportOpen)
-  const [presetIdx, setPresetIdx] = useState(0)
+  const toast = useEditor((s) => s.toast)
+  const [presetIdx, setPresetIdxState] = useState(() => {
+    const saved = Number(localStorage.getItem(PRESET_KEY))
+    return saved >= 0 && saved < EXPORT_PRESETS.length ? saved : 0
+  })
+  const setPresetIdx = (i: number) => {
+    setPresetIdxState(i)
+    try { localStorage.setItem(PRESET_KEY, String(i)) } catch { /* private mode */ }
+  }
   const [includeAudio, setIncludeAudio] = useState(true)
   const [progress, setProgress] = useState<ExportProgress | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -31,10 +41,17 @@ export function ExportDialog() {
       a.download = `${project.name.replace(/[^\w.-]+/g, '_') || 'video'}.mp4`
       a.click()
       URL.revokeObjectURL(a.href)
+      toast(`Exported ${a.download} (${(blob.size / 1e6).toFixed(1)} MB)`, 'ok')
     } catch (e) {
       setProgress(null)
       setError(e instanceof Error ? e.message : String(e))
     }
+  }
+
+  function formatEstimate(seconds: number, videoBitrate: number, audio: boolean): string {
+    if (seconds <= 0) return 'Timeline is empty'
+    const bytes = (seconds * (videoBitrate + (audio ? 192_000 : 0))) / 8
+    return `≈ ${Math.round(seconds)}s video, ~${(bytes / 1e6).toFixed(1)} MB`
   }
 
   const phaseLabel =
@@ -59,8 +76,8 @@ export function ExportDialog() {
           Include audio (AAC)
         </label>
         <p className="hint">
-          Encodes H.264 MP4 entirely in this browser with WebCodecs — nothing
-          leaves your Mac. Long timelines take roughly real-time or faster.
+          {formatEstimate(projectDuration(project), EXPORT_PRESETS[presetIdx].videoBitrate, includeAudio)} · encoded
+          entirely in this browser with WebCodecs — nothing leaves your machine.
         </p>
         {progress && (
           <>

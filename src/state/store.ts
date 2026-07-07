@@ -25,6 +25,24 @@ export function emptyProject(): Project {
 
 export type PanelTab = 'media' | 'text' | 'charts' | 'stickers' | 'ai' | 'script'
 
+export interface Toast {
+  id: string
+  msg: string
+  kind: 'info' | 'ok' | 'error'
+}
+
+export type Theme = 'dark' | 'light'
+
+function initialTheme(): Theme {
+  try {
+    const t = localStorage.getItem('cutroom.theme')
+    if (t === 'light' || t === 'dark') return t
+    return matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+  } catch {
+    return 'dark'
+  }
+}
+
 interface EditorState {
   project: Project
   /** playhead position in seconds */
@@ -36,7 +54,12 @@ interface EditorState {
   timelineZoom: number // px per second
   snapping: boolean
   exportOpen: boolean
+  helpOpen: boolean
   busy: string | null // global progress message ('Transcribing… 40%')
+  toasts: Toast[]
+  theme: Theme
+  /** transient vertical indicator (timeline sec) shown while a drag snaps */
+  snapLine: number | null
 
   past: Project[]
   future: Project[]
@@ -48,8 +71,12 @@ interface EditorState {
   setZoom: (z: number) => void
   toggleSnapping: () => void
   setExportOpen: (open: boolean) => void
+  setHelpOpen: (open: boolean) => void
   setBusy: (msg: string | null) => void
   select: (ids: string[]) => void
+  toast: (msg: string, kind?: Toast['kind']) => void
+  dismissToast: (id: string) => void
+  setTheme: (t: Theme) => void
 
   /** All project mutations flow through here so history stays consistent. */
   updateProject: (fn: (p: Project) => Project, options?: { transient?: boolean }) => void
@@ -67,7 +94,11 @@ export const useEditor = create<EditorState>((set, get) => ({
   timelineZoom: 60,
   snapping: true,
   exportOpen: false,
+  helpOpen: false,
   busy: null,
+  toasts: [],
+  theme: initialTheme(),
+  snapLine: null,
   past: [],
   future: [],
 
@@ -77,8 +108,23 @@ export const useEditor = create<EditorState>((set, get) => ({
   setZoom: (z) => set({ timelineZoom: clamp(z, 8, 480) }),
   toggleSnapping: () => set((s) => ({ snapping: !s.snapping })),
   setExportOpen: (exportOpen) => set({ exportOpen }),
+  setHelpOpen: (helpOpen) => set({ helpOpen }),
   setBusy: (busy) => set({ busy }),
   select: (selectedClipIds) => set({ selectedClipIds }),
+
+  toast: (msg, kind = 'info') => {
+    const id = uid('toast')
+    set((s) => ({ toasts: [...s.toasts.slice(-3), { id, msg, kind }] }))
+    setTimeout(() => get().dismissToast(id), kind === 'error' ? 6000 : 3500)
+  },
+  dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
+
+  setTheme: (theme) => {
+    try { localStorage.setItem('cutroom.theme', theme) } catch { /* private mode */ }
+    document.documentElement.dataset.theme = theme
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'light' ? '#fbfbfc' : '#101014')
+    set({ theme })
+  },
 
   updateProject: (fn, options) =>
     set((s) => {

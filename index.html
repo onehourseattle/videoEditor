@@ -11,6 +11,16 @@
     <link rel="apple-touch-icon" href="/icons/icon-180.png" />
     <link rel="icon" type="image/png" href="/icons/icon-192.png" />
     <title>CutRoom — Local AI Video Editor</title>
+    <script>
+      // apply the saved theme before first paint — no flash of the wrong mode
+      try {
+        var t = localStorage.getItem('cutroom.theme')
+        if (t !== 'light' && t !== 'dark') {
+          t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+        }
+        document.documentElement.dataset.theme = t
+      } catch (e) { /* private mode */ }
+    </script>
   </head>
   <body>
     <div id="root"></div>

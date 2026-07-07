@@ -12,6 +12,8 @@ import { StickersPanel } from './components/panels/StickersPanel'
 import { AIPanel } from './components/panels/AIPanel'
 import { ScriptPanel } from './components/panels/ScriptPanel'
 import { ExportDialog } from './components/ExportDialog'
+import { HelpOverlay } from './components/HelpOverlay'
+import { Toasts } from './components/Toasts'
 import { useShortcuts } from './hooks/useShortcuts'
 
 let restoredOnce = false
@@ -29,6 +31,7 @@ export function App() {
   const activePanel = useEditor((s) => s.activePanel)
   const setPanel = useEditor((s) => s.setPanel)
   const exportOpen = useEditor((s) => s.exportOpen)
+  const helpOpen = useEditor((s) => s.helpOpen)
   const project = useEditor((s) => s.project)
 
   useShortcuts()
@@ -85,6 +88,8 @@ export function App() {
         <Inspector />
       </div>
       {exportOpen && <ExportDialog />}
+      {helpOpen && <HelpOverlay />}
+      <Toasts />
     </div>
   )
 }

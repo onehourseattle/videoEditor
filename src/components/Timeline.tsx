@@ -1,13 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Clip, Track } from '../types/model'
 import {
-  useEditor, splitClipAt, removeClips, replaceClip, addTrack, projectDuration, byStart,
+  useEditor, splitClipAt, removeClips, replaceClip, addTrack, addClipToTrack, projectDuration, byStart,
 } from '../state/store'
 import { assetStore } from '../state/assetStore'
+import { makeClipFromAsset, trackAccepts, ASSET_DRAG_MIME } from '../state/clipFactory'
 import { playback } from '../engine/playback'
 import { formatTime } from '../utils/time'
+import { uid } from '../utils/id'
 
-const HEAD_W = 130
+const HEAD_W = 150
+
+interface MenuState {
+  x: number
+  y: number
+  clipId: string
+}
 
 export function Timeline() {
   const project = useEditor((s) => s.project)
@@ -16,16 +24,32 @@ export function Timeline() {
   const snapping = useEditor((s) => s.snapping)
   const toggleSnapping = useEditor((s) => s.toggleSnapping)
   const currentTime = useEditor((s) => s.currentTime)
+  const playing = useEditor((s) => s.playing)
   const selected = useEditor((s) => s.selectedClipIds)
   const select = useEditor((s) => s.select)
+  const snapLine = useEditor((s) => s.snapLine)
   const updateProject = useEditor((s) => s.updateProject)
+  const toast = useEditor((s) => s.toast)
 
   const scrollRef = useRef<HTMLDivElement>(null)
+  const [hoverT, setHoverT] = useState<number | null>(null)
+  const [menu, setMenu] = useState<MenuState | null>(null)
+
   // clamp: a corrupt/Infinity clip duration must never explode the ruler loop
   const rawDuration = projectDuration(project)
   const duration = Math.min(Math.max(isFinite(rawDuration) ? rawDuration + 10 : 30, 30), 4 * 3600)
 
-  const timeFromEvent = (e: React.PointerEvent | React.MouseEvent) => {
+  // keep the playhead in view while playing
+  useEffect(() => {
+    if (!playing || !scrollRef.current) return
+    const el = scrollRef.current
+    const px = HEAD_W + currentTime * zoom
+    if (px < el.scrollLeft + HEAD_W + 20 || px > el.scrollLeft + el.clientWidth - 120) {
+      el.scrollLeft = Math.max(0, px - HEAD_W - 60)
+    }
+  }, [currentTime, playing, zoom])
+
+  const timeFromEvent = (e: { clientX: number }) => {
     const rect = scrollRef.current!.getBoundingClientRect()
     const x = e.clientX - rect.left + scrollRef.current!.scrollLeft - HEAD_W
     return Math.max(0, x / zoom)
@@ -33,11 +57,7 @@ export function Timeline() {
 
   const onRulerDown = (e: React.PointerEvent) => {
     playback.seek(timeFromEvent(e))
-    const move = (ev: PointerEvent) => {
-      const rect = scrollRef.current!.getBoundingClientRect()
-      const x = ev.clientX - rect.left + scrollRef.current!.scrollLeft - HEAD_W
-      playback.seek(Math.max(0, x / zoom))
-    }
+    const move = (ev: PointerEvent) => playback.seek(timeFromEvent(ev))
     const up = () => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
@@ -54,6 +74,44 @@ export function Timeline() {
   const deleteSelected = () => {
     updateProject((p) => removeClips(p, selected))
     select([])
+  }
+
+  const fitZoom = () => {
+    const el = scrollRef.current
+    if (!el || rawDuration <= 0) return
+    setZoom((el.clientWidth - HEAD_W - 40) / rawDuration)
+  }
+
+  // ⌘/Ctrl + scroll = zoom around the cursor position
+  const onWheel = (e: React.WheelEvent) => {
+    if (!e.metaKey && !e.ctrlKey) return
+    e.preventDefault()
+    const el = scrollRef.current!
+    const tAtCursor = timeFromEvent(e)
+    const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15
+    const next = Math.min(480, Math.max(8, zoom * factor))
+    setZoom(next)
+    // keep the time under the cursor stationary
+    requestAnimationFrame(() => {
+      const rect = el.getBoundingClientRect()
+      el.scrollLeft = tAtCursor * next - (e.clientX - rect.left - HEAD_W)
+    })
+  }
+
+  // drop media from the library at the exact pointer position
+  const onLaneDrop = (e: React.DragEvent, track: Track) => {
+    const assetId = e.dataTransfer.getData(ASSET_DRAG_MIME)
+    if (!assetId) return
+    e.preventDefault()
+    const asset = project.assets[assetId]
+    if (!asset) return
+    const clip = makeClipFromAsset(asset, Math.max(0, timeFromEvent(e)))
+    if (!trackAccepts(clip, track) || track.locked) {
+      toast(clip.kind === 'audio' ? 'Audio goes on an audio track' : 'This media needs a video/overlay track', 'error')
+      return
+    }
+    updateProject((p) => addClipToTrack(p, track.id, clip))
+    select([clip.id])
   }
 
   // ruler ticks: pick a step that keeps labels readable at any zoom
@@ -73,13 +131,21 @@ export function Timeline() {
         </button>
         <div style={{ flex: 1 }} />
         <span style={{ color: 'var(--text-faint)', fontSize: 11 }}>{formatTime(currentTime, project.fps)}</span>
+        <button className="small ghost" onClick={fitZoom} title="Fit timeline to window">⤢ Fit</button>
         <input
           type="range" min={8} max={480} value={zoom}
           onChange={(e) => setZoom(Number(e.target.value))}
-          style={{ width: 120 }} title="Zoom"
+          style={{ width: 120 }} title="Zoom (⌘+scroll on the timeline)"
         />
       </div>
-      <div className="timeline-scroll" ref={scrollRef} onClick={() => select([])}>
+      <div
+        className="timeline-scroll"
+        ref={scrollRef}
+        onClick={() => select([])}
+        onWheel={onWheel}
+        onPointerMove={(e) => setHoverT(timeFromEvent(e))}
+        onPointerLeave={() => setHoverT(null)}
+      >
         <div className="timeline-inner" style={{ width: HEAD_W + duration * zoom }}>
           <div className="ruler" onPointerDown={onRulerDown} style={{ marginLeft: HEAD_W, width: duration * zoom }}>
             {ticks.map((t) => (
@@ -89,72 +155,168 @@ export function Timeline() {
             ))}
           </div>
           {project.tracks.map((track) => (
-            <TrackRow key={track.id} track={track} zoom={zoom} timeFromEvent={timeFromEvent} />
+            <TrackRow
+              key={track.id} track={track} zoom={zoom}
+              timeFromEvent={timeFromEvent}
+              onLaneDrop={onLaneDrop}
+              onClipMenu={(x, y, clipId) => setMenu({ x, y, clipId })}
+            />
           ))}
+          {hoverT !== null && !playing && <div className="hoverline" style={{ left: HEAD_W + hoverT * zoom }} />}
+          {snapLine !== null && <div className="snapline" style={{ left: HEAD_W + snapLine * zoom }} />}
           <div className="playhead" style={{ left: HEAD_W + currentTime * zoom }} />
         </div>
       </div>
+      {menu && <ClipMenu menu={menu} close={() => setMenu(null)} />}
     </div>
   )
 }
 
-function TrackRow({ track, zoom, timeFromEvent }: {
+// ─── context menu ────────────────────────────────────────────────────────────
+
+function ClipMenu({ menu, close }: { menu: MenuState; close: () => void }) {
+  const updateProject = useEditor((s) => s.updateProject)
+  const select = useEditor((s) => s.select)
+
+  useEffect(() => {
+    const off = () => close()
+    window.addEventListener('pointerdown', off)
+    window.addEventListener('blur', off)
+    return () => {
+      window.removeEventListener('pointerdown', off)
+      window.removeEventListener('blur', off)
+    }
+  }, [close])
+
+  const s = useEditor.getState()
+  const found = s.project.tracks.flatMap((t) => t.clips.map((c) => ({ t, c }))).find((x) => x.c.id === menu.clipId)
+  if (!found) return null
+  const { t: track, c: clip } = found
+  const canMute = clip.kind === 'video' || clip.kind === 'audio'
+
+  const item = (label: string, action: () => void, disabled = false) => (
+    <button
+      className="menu-item" disabled={disabled}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={() => { action(); close() }}
+    >{label}</button>
+  )
+
+  return (
+    <div className="context-menu" style={{ left: menu.x, top: menu.y }}>
+      {item('✂️ Split at playhead', () => {
+        updateProject((p) => splitClipAt(p, clip.id, useEditor.getState().currentTime))
+      }, s.currentTime <= clip.start || s.currentTime >= clip.start + clip.duration)}
+      {item('⧉ Duplicate', () => {
+        const copy = structuredClone(clip)
+        copy.id = uid('clip')
+        copy.start = clip.start + clip.duration
+        updateProject((p) => addClipToTrack(p, track.id, copy))
+        select([copy.id])
+      })}
+      {canMute && item(('muted' in clip && clip.muted) ? '🔊 Unmute' : '🔇 Mute', () => {
+        updateProject((p) => replaceClip(p, clip.id, (c) => ('muted' in c ? { ...c, muted: !c.muted } : c)))
+      })}
+      {clip.transition && item('◇ Remove transition', () => {
+        updateProject((p) => replaceClip(p, clip.id, (c) => ({ ...c, transition: undefined })))
+      })}
+      {item('🗑 Delete', () => {
+        updateProject((p) => removeClips(p, [clip.id]))
+        select([])
+      })}
+    </div>
+  )
+}
+
+// ─── track row ───────────────────────────────────────────────────────────────
+
+function TrackRow({ track, zoom, timeFromEvent, onLaneDrop, onClipMenu }: {
   track: Track
   zoom: number
-  timeFromEvent: (e: React.PointerEvent) => number
+  timeFromEvent: (e: { clientX: number }) => number
+  onLaneDrop: (e: React.DragEvent, track: Track) => void
+  onClipMenu: (x: number, y: number, clipId: string) => void
 }) {
   const updateProject = useEditor((s) => s.updateProject)
+  const [renaming, setRenaming] = useState(false)
+  const [dragOver, setDragOver] = useState(false)
+
+  const patchTrack = (patch: Partial<Track>) =>
+    updateProject((p) => ({ ...p, tracks: p.tracks.map((t) => (t.id === track.id ? { ...t, ...patch } : t)) }))
 
   return (
     <div className="track-row">
       <div className="track-head">
-        <span className="name" title={track.name}>{track.name}</span>
+        {renaming ? (
+          <input
+            autoFocus
+            defaultValue={track.name}
+            onBlur={(e) => { patchTrack({ name: e.target.value || track.name }); setRenaming(false) }}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === 'Escape') (e.target as HTMLInputElement).blur() }}
+            style={{ width: 70, fontSize: 11, padding: '2px 4px' }}
+          />
+        ) : (
+          <span className="name" title={`${track.name} — double-click to rename`} onDoubleClick={() => setRenaming(true)}>
+            {track.name}
+          </span>
+        )}
         {track.kind !== 'overlay' ? (
           <button
             className={track.muted ? 'on' : ''}
             title={track.muted ? 'Unmute' : 'Mute'}
-            onClick={() => updateProject((p) => ({
-              ...p, tracks: p.tracks.map((t) => (t.id === track.id ? { ...t, muted: !t.muted } : t)),
-            }))}
+            onClick={() => patchTrack({ muted: !track.muted })}
           >{track.muted ? '🔇' : '🔊'}</button>
         ) : null}
         <button
           className={track.hidden ? 'on' : ''}
           title={track.hidden ? 'Show' : 'Hide'}
-          onClick={() => updateProject((p) => ({
-            ...p, tracks: p.tracks.map((t) => (t.id === track.id ? { ...t, hidden: !t.hidden } : t)),
-          }))}
+          onClick={() => patchTrack({ hidden: !track.hidden })}
         >{track.hidden ? '🚫' : '👁'}</button>
         <button
           className={track.locked ? 'on' : ''}
           title={track.locked ? 'Unlock' : 'Lock'}
-          onClick={() => updateProject((p) => ({
-            ...p, tracks: p.tracks.map((t) => (t.id === track.id ? { ...t, locked: !t.locked } : t)),
-          }))}
+          onClick={() => patchTrack({ locked: !track.locked })}
         >{track.locked ? '🔒' : '🔓'}</button>
+        {track.clips.length === 0 && (
+          <button
+            className="del"
+            title="Remove empty track"
+            onClick={() => updateProject((p) =>
+              p.tracks.length > 1 ? { ...p, tracks: p.tracks.filter((t) => t.id !== track.id) } : p,
+            )}
+          >✕</button>
+        )}
       </div>
-      <div className="track-lane">
+      <div
+        className={`track-lane ${dragOver ? 'drop-target' : ''}`}
+        onDragOver={(e) => {
+          if (e.dataTransfer.types.includes(ASSET_DRAG_MIME)) {
+            e.preventDefault()
+            e.dataTransfer.dropEffect = 'copy'
+            setDragOver(true)
+          }
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => { setDragOver(false); onLaneDrop(e, track) }}
+      >
         {track.clips.map((clip) => (
-          <ClipView key={clip.id} clip={clip} track={track} zoom={zoom} timeFromEvent={timeFromEvent} />
+          <ClipView key={clip.id} clip={clip} track={track} zoom={zoom} timeFromEvent={timeFromEvent} onClipMenu={onClipMenu} />
         ))}
       </div>
     </div>
   )
 }
 
+// ─── clips ───────────────────────────────────────────────────────────────────
+
 type DragMode = 'move' | 'trim-left' | 'trim-right'
 
-/** Which track kinds a clip may live on (cross-track drag). */
-function trackAccepts(clip: Clip, track: Track): boolean {
-  if (clip.kind === 'audio') return track.kind === 'audio'
-  return track.kind === 'video' || track.kind === 'overlay'
-}
-
-function ClipView({ clip, track, zoom, timeFromEvent }: {
+function ClipView({ clip, track, zoom, timeFromEvent, onClipMenu }: {
   clip: Clip
   track: Track
   zoom: number
-  timeFromEvent: (e: React.PointerEvent) => number
+  timeFromEvent: (e: { clientX: number }) => number
+  onClipMenu: (x: number, y: number, clipId: string) => void
 }) {
   const selected = useEditor((s) => s.selectedClipIds.includes(clip.id))
   const select = useEditor((s) => s.select)
@@ -176,7 +338,7 @@ function ClipView({ clip, track, zoom, timeFromEvent }: {
   }, [asset?.id, asset?.url, clip.kind])
 
   const beginDrag = (e: React.PointerEvent, mode: DragMode) => {
-    if (track.locked) return
+    if (track.locked || e.button !== 0) return
     e.stopPropagation()
     e.preventDefault()
     select([clip.id])
@@ -196,16 +358,17 @@ function ClipView({ clip, track, zoom, timeFromEvent }: {
       return times
     })()
 
-    const snap = (t: number) => {
-      if (!useEditor.getState().snapping) return t
+    const snap = (t: number): { t: number; snapped: number | null } => {
+      if (!useEditor.getState().snapping) return { t, snapped: null }
       const threshold = 8 / zoom
       let best = t
       let bestD = threshold
+      let snapped: number | null = null
       for (const st of snapTargets) {
         const d = Math.abs(st - t)
-        if (d < bestD) { best = st; bestD = d }
+        if (d < bestD) { best = st; bestD = d; snapped = st }
       }
-      return best
+      return { t: best, snapped }
     }
 
     /** Track row under the pointer (for vertical cross-track moves). */
@@ -221,26 +384,40 @@ function ClipView({ clip, track, zoom, timeFromEvent }: {
     const onMove = (ev: PointerEvent) => {
       const scroll = document.querySelector('.timeline-scroll') as HTMLDivElement
       const r = scroll.getBoundingClientRect()
-      const t = Math.max(0, (ev.clientX - r.left + scroll.scrollLeft - 130) / zoom)
+      const t = Math.max(0, (ev.clientX - r.left + scroll.scrollLeft - HEAD_W) / zoom)
       const delta = t - startT
       if (Math.abs(delta) * zoom > 3) moved = true
       if (!moved) return
       setDragging(true)
 
+      let snappedAt: number | null = null
       updateProject((p) => {
         let next = replaceClip(p, clip.id, (c) => {
           if (mode === 'move') {
-            return { ...c, start: Math.max(0, snap(orig.start + delta)) }
+            const r2 = snap(orig.start + delta)
+            const endSnap = snap(orig.start + orig.duration + delta)
+            // snap either edge, whichever is closer
+            let start = r2.t
+            snappedAt = r2.snapped
+            if (r2.snapped === null && endSnap.snapped !== null) {
+              start = endSnap.t - orig.duration
+              snappedAt = endSnap.snapped
+            }
+            return { ...c, start: Math.max(0, start) }
           }
           if (mode === 'trim-left') {
-            const newStart = Math.min(snap(orig.start + delta), orig.start + orig.duration - 0.1)
+            const r2 = snap(orig.start + delta)
+            snappedAt = r2.snapped
+            const newStart = Math.min(r2.t, orig.start + orig.duration - 0.1)
             const d = newStart - orig.start
             const trimmed = { ...c, start: Math.max(0, newStart), duration: orig.duration - d }
             if ('offset' in trimmed) (trimmed as { offset: number }).offset = Math.max(0, orig.offset + d * speed)
             return trimmed
           }
           // trim-right
-          const newEnd = Math.max(snap(orig.start + orig.duration + delta), orig.start + 0.1)
+          const r2 = snap(orig.start + orig.duration + delta)
+          snappedAt = r2.snapped
+          const newEnd = Math.max(r2.t, orig.start + 0.1)
           return { ...c, duration: newEnd - orig.start }
         })
 
@@ -262,12 +439,14 @@ function ClipView({ clip, track, zoom, timeFromEvent }: {
         }
         return next
       }, { transient: true })
+      useEditor.setState({ snapLine: snappedAt })
     }
 
     const onUp = () => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
       setDragging(false)
+      useEditor.setState({ snapLine: null })
       if (moved) {
         // one undo step for the whole gesture — restores position AND track
         const s = useEditor.getState()
@@ -285,6 +464,12 @@ function ClipView({ clip, track, zoom, timeFromEvent }: {
       style={{ left: clip.start * zoom, width: Math.max(6, clip.duration * zoom), cursor: dragging ? 'grabbing' : 'grab' }}
       onPointerDown={(e) => beginDrag(e, 'move')}
       onClick={(e) => { e.stopPropagation(); select([clip.id]) }}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        select([clip.id])
+        onClipMenu(e.clientX, e.clientY, clip.id)
+      }}
     >
       {artUrl ? (
         <div className={`thumb ${isWave ? 'wave' : ''}`} style={{ backgroundImage: `url(${artUrl})` }} />
