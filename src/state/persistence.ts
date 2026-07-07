@@ -13,6 +13,8 @@ export interface ProjectSummary {
   height: number
   duration: number
   thumb: string
+  /** template = reusable starting point, hidden from the projects list */
+  template?: boolean
 }
 
 interface ProjectRecord extends ProjectSummary {
@@ -46,8 +48,45 @@ export async function saveProjectRecord(p: Project): Promise<void> {
 export async function listProjects(): Promise<ProjectSummary[]> {
   const all = await idb.getAll<ProjectRecord>('projects')
   return all
+    .filter((r) => !r.template)
     .map(({ json: _json, ...summary }) => summary)
     .sort((a, b) => b.updatedAt - a.updatedAt)
+}
+
+export async function listTemplates(): Promise<ProjectSummary[]> {
+  const all = await idb.getAll<ProjectRecord>('projects')
+  return all
+    .filter((r) => r.template)
+    .map(({ json: _json, ...summary }) => summary)
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+}
+
+/** Freeze the current project as a reusable template. */
+export async function saveAsTemplate(p: Project, name: string, templateId: string): Promise<void> {
+  const json: Project = { ...structuredClone(p), id: templateId, name }
+  for (const a of Object.values(json.assets)) {
+    a.url = ''
+    if (!a.thumbnail?.startsWith('data:')) a.thumbnail = ''
+  }
+  const rec: ProjectRecord = {
+    id: templateId,
+    name,
+    updatedAt: Date.now(),
+    width: p.width,
+    height: p.height,
+    duration: projectDuration(p),
+    thumb: Object.values(p.assets).find((a) => a.thumbnail?.startsWith('data:'))?.thumbnail ?? '',
+    template: true,
+    json,
+  }
+  await idb.put('projects', templateId, rec)
+}
+
+/** Instantiate a stored template as a fresh project (does not touch the template). */
+export async function projectFromTemplate(templateId: string, newId: string): Promise<Project | null> {
+  const rec = await idb.get<ProjectRecord>('projects', templateId)
+  if (!rec) return null
+  return { ...structuredClone(rec.json), id: newId, name: `${rec.name}` }
 }
 
 export async function loadProjectRecord(id: string): Promise<Project | null> {

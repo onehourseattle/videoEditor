@@ -1,11 +1,37 @@
-import { useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { CaptionClip } from '../../types/model'
-import { useEditor, replaceClip, removeClips, findClip, addClipToTrack } from '../../state/store'
+import { useEditor, replaceClip, removeClips, findClip, addClipToTrack, rippleDeleteAllTracks } from '../../state/store'
 import { createScriptApi } from '../../scripting/api'
+import { getCaptionModel, setCaptionModel } from '../../ai/transcribe'
 import { CAPTION_TEMPLATES, applyTemplate } from '../../engine/captionTemplates'
 import { toSrt, toVtt, parseSubtitles, cuesToCaptionClips, downloadText } from '../../utils/subtitles'
 import { playback } from '../../engine/playback'
 import { formatTime } from '../../utils/time'
+
+interface WordSelection {
+  count: number
+  from: number // absolute timeline seconds
+  to: number
+  preview: string
+}
+
+/** Words currently covered by the native text selection inside the transcript. */
+function selectionFromDom(): WordSelection | null {
+  const sel = window.getSelection()
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null
+  const range = sel.getRangeAt(0)
+  const words = Array.from(document.querySelectorAll<HTMLElement>('.tr-word[data-start]'))
+    .filter((el) => range.intersectsNode(el))
+  if (words.length < 1) return null
+  const starts = words.map((w) => Number(w.dataset.start))
+  const ends = words.map((w) => Number(w.dataset.end))
+  return {
+    count: words.length,
+    from: Math.min(...starts),
+    to: Math.max(...ends),
+    preview: words.map((w) => w.textContent).join(' ').slice(0, 40),
+  }
+}
 
 export function CaptionsPanel() {
   const project = useEditor((s) => s.project)
@@ -14,6 +40,24 @@ export function CaptionsPanel() {
   const toast = useEditor((s) => s.toast)
   const select = useEditor((s) => s.select)
   const subFileRef = useRef<HTMLInputElement>(null)
+  const [wordSel, setWordSel] = useState<WordSelection | null>(null)
+
+  // Descript-style text-based editing: watch the text selection over the transcript
+  useEffect(() => {
+    const onSel = () => setWordSel(selectionFromDom())
+    document.addEventListener('selectionchange', onSel)
+    return () => document.removeEventListener('selectionchange', onSel)
+  }, [])
+
+  const cutSelection = () => {
+    if (!wordSel) return
+    const from = Math.max(0, wordSel.from - 0.02)
+    const to = wordSel.to + 0.02
+    updateProject((p) => rippleDeleteAllTracks(p, from, to))
+    window.getSelection()?.removeAllRanges()
+    setWordSel(null)
+    toast(`Cut ${wordSel.count} word(s) — video, audio and captions rippled together`, 'ok')
+  }
 
   const captionClips: CaptionClip[] = project.tracks
     .flatMap((t) => t.clips)
@@ -93,6 +137,15 @@ export function CaptionsPanel() {
     <>
       <h3>Captions</h3>
       <button className="primary" onClick={() => void generate()}>💬 Generate from speech</button>
+      <label className="field">Speech model
+        <select
+          defaultValue={getCaptionModel()}
+          onChange={(e) => setCaptionModel(e.target.value as 'english' | 'multilingual')}
+        >
+          <option value="english">English (fast)</option>
+          <option value="multilingual">Multilingual — 90+ languages</option>
+        </select>
+      </label>
       <div className="row" style={{ display: 'flex', gap: 6 }}>
         <button className="small" style={{ flex: 1 }} disabled={!captionClips.length}
           onClick={() => downloadText(`${project.name || 'captions'}.srt`, toSrt(project))}>↓ SRT</button>
@@ -118,8 +171,14 @@ export function CaptionsPanel() {
         <p className="hint">
           Generate captions from speech (on-device Whisper) or import an SRT/VTT
           file. Every word becomes editable here: click to seek, type to fix,
-          clear a word to cut it.
+          clear a word to cut it — or <b>select a phrase and cut it from the
+          video itself</b>, Descript-style.
         </p>
+      )}
+      {wordSel && wordSel.count > 0 && (
+        <button className="primary cut-words" onClick={cutSelection}>
+          ✂️ Cut {wordSel.count} word{wordSel.count > 1 ? 's' : ''} from video — “{wordSel.preview}…”
+        </button>
       )}
       <div className="transcript">
         {captionClips.map((clip) => (
@@ -139,6 +198,8 @@ export function CaptionsPanel() {
                 <span
                   key={`${clip.id}_${i}`}
                   className="tr-word"
+                  data-start={(clip.start + w.start).toFixed(3)}
+                  data-end={(clip.start + w.end).toFixed(3)}
                   contentEditable
                   suppressContentEditableWarning
                   spellCheck={false}

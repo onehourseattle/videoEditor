@@ -8,8 +8,11 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 
-const MODEL = 'onnx-community/whisper-tiny.en'
-const BASE = `https://huggingface.co/${MODEL}/resolve/main`
+// default: English-only tiny model. `npm run fetch-models -- --multilingual`
+// also grabs the 90+ language variant (adds ~75 MB).
+const MODELS = ['onnx-community/whisper-tiny.en']
+if (process.argv.includes('--multilingual')) MODELS.push('onnx-community/whisper-tiny')
+
 const FILES = [
   'config.json',
   'generation_config.json',
@@ -20,17 +23,15 @@ const FILES = [
   'onnx/decoder_model_merged_quantized.onnx',
 ]
 
-const outDir = path.join(process.cwd(), 'public', 'models', MODEL)
-
-async function download(file) {
-  const dest = path.join(outDir, file)
+async function download(model, file) {
+  const dest = path.join(process.cwd(), 'public', 'models', model, file)
   if (existsSync(dest)) {
-    console.log(`✓ ${file} (cached)`)
+    console.log(`✓ ${model}/${file} (cached)`)
     return
   }
   await mkdir(path.dirname(dest), { recursive: true })
-  const url = `${BASE}/${file}`
-  process.stdout.write(`↓ ${file} … `)
+  const url = `https://huggingface.co/${model}/resolve/main/${file}`
+  process.stdout.write(`↓ ${model}/${file} … `)
   const res = await fetch(url, { redirect: 'follow' })
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} for ${url}`)
   const buf = Buffer.from(await res.arrayBuffer())
@@ -38,8 +39,10 @@ async function download(file) {
   console.log(`${(buf.length / 1e6).toFixed(1)} MB`)
 }
 
-console.log(`Fetching ${MODEL} → public/models/\n`)
-for (const f of FILES) {
-  await download(f)
+for (const model of MODELS) {
+  console.log(`Fetching ${model} → public/models/\n`)
+  for (const f of FILES) {
+    await download(model, f)
+  }
 }
 console.log('\nDone. Auto-captions now run fully offline.')

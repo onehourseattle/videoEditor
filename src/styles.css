@@ -401,6 +401,12 @@ button:active:not(:disabled) { transform: scale(0.97); }
 }
 .tr-word:hover { border-color: var(--border); }
 .tr-word:focus { border-color: var(--accent); background: var(--accent-soft); }
+.tr-word::selection { background: var(--accent); color: #fff; }
+.cut-words {
+  position: sticky; top: 0; z-index: 5;
+  animation: toast-in 0.15s ease-out;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 
 /* ── export tray ── */
 .export-tray {

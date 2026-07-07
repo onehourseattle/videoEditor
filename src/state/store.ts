@@ -262,12 +262,30 @@ export function rippleDeleteRange(p: Project, trackId: string, from: number, to:
         } else {
           // overlaps the removed range: keep left part and/or right part
           if (c.start < from) {
-            clips.push({ ...c, duration: from - c.start, transition: undefined })
+            const keep = from - c.start
+            const left: Clip = { ...c, duration: keep, transition: undefined }
+            if (left.kind === 'caption') left.words = left.words.filter((w) => w.start < keep)
+            if ((left.kind === 'video' || left.kind === 'audio') && left.gain) {
+              left.gain = left.gain.filter((k) => k.t <= keep)
+              if (left.gain.length < 2) left.gain = undefined
+            }
+            clips.push(left)
           }
           if (end > to) {
             const cutIntoClip = to - c.start
             const right: Clip = { ...c, id: uid('clip'), start: from, duration: end - to }
-            if (right.kind === 'video' || right.kind === 'audio') right.offset += cutIntoClip * right.speed
+            if (right.kind === 'video' || right.kind === 'audio') {
+              right.offset += cutIntoClip * right.speed
+              if (right.gain) {
+                right.gain = right.gain.filter((k) => k.t >= cutIntoClip).map((k) => ({ ...k, t: k.t - cutIntoClip }))
+                if (right.gain.length < 2) right.gain = undefined
+              }
+            }
+            if (right.kind === 'caption') {
+              right.words = right.words
+                .filter((w) => w.end > cutIntoClip)
+                .map((w) => ({ ...w, start: Math.max(0, w.start - cutIntoClip), end: w.end - cutIntoClip }))
+            }
             clips.push(right)
           }
         }
@@ -275,6 +293,15 @@ export function rippleDeleteRange(p: Project, trackId: string, from: number, to:
       return { ...tr, clips: clips.sort(byStart) }
     }),
   }
+}
+
+/**
+ * Ripple-delete a time range from EVERY track — the text-based-editing cut.
+ * Video, audio, captions and overlays all close the gap together, so the
+ * edit stays in sync.
+ */
+export function rippleDeleteAllTracks(p: Project, from: number, to: number): Project {
+  return p.tracks.reduce((acc, tr) => rippleDeleteRange(acc, tr.id, from, to), p)
 }
 
 export function byStart(a: Clip, b: Clip): number {

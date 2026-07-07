@@ -7,23 +7,48 @@ export interface TranscriptWord {
   end: number
 }
 
-let pipelinePromise: Promise<any> | null = null
+export type WhisperModel = 'english' | 'multilingual'
+
+const MODEL_IDS: Record<WhisperModel, string> = {
+  english: 'onnx-community/whisper-tiny.en',
+  multilingual: 'onnx-community/whisper-tiny',
+}
+
+const LANG_KEY = 'cutroom.captionModel'
+
+export function getCaptionModel(): WhisperModel {
+  try {
+    return localStorage.getItem(LANG_KEY) === 'multilingual' ? 'multilingual' : 'english'
+  } catch {
+    return 'english'
+  }
+}
+
+export function setCaptionModel(m: WhisperModel) {
+  try { localStorage.setItem(LANG_KEY, m) } catch { /* private mode */ }
+}
+
+const pipelines = new Map<WhisperModel, Promise<any>>()
 
 /**
  * On-device speech-to-text with Whisper via transformers.js (ONNX/WASM/WebGPU).
  * Strictly local: the inference runtime is bundled with the app, and model
  * weights are ONLY loaded from this app's own /models directory (populated
- * once by `npm run fetch-models`). No remote fetching, ever — if the weights
- * aren't there, we fail with instructions rather than call out to a hub.
+ * once by `npm run fetch-models`, `-- --multilingual` for 90+ languages).
+ * No remote fetching, ever — if the weights aren't there, we fail with
+ * instructions rather than call out to a hub.
  */
-async function getPipeline(onProgress?: (msg: string) => void) {
-  if (!pipelinePromise) {
-    pipelinePromise = (async () => {
-      const check = await fetch('/models/onnx-community/whisper-tiny.en/config.json', { method: 'HEAD' })
-        .catch(() => null)
+async function getPipeline(model: WhisperModel, onProgress?: (msg: string) => void) {
+  let p = pipelines.get(model)
+  if (!p) {
+    p = (async () => {
+      const id = MODEL_IDS[model]
+      const check = await fetch(`/models/${id}/config.json`, { method: 'HEAD' }).catch(() => null)
       if (!check?.ok) {
         throw new Error(
-          'Whisper model not found. Run `npm run fetch-models` once (downloads ~75 MB to public/models/), then restart the dev server. After that, captions work fully offline.',
+          model === 'multilingual'
+            ? 'Multilingual Whisper model not found. Run `npm run fetch-models -- --multilingual` once, then restart the dev server.'
+            : 'Whisper model not found. Run `npm run fetch-models` once (downloads ~75 MB to public/models/), then restart the dev server. After that, captions work fully offline.',
         )
       }
       const { pipeline, env } = await import('@huggingface/transformers')
@@ -31,13 +56,12 @@ async function getPipeline(onProgress?: (msg: string) => void) {
       env.allowRemoteModels = false // hard guarantee: never contact a model hub
       env.localModelPath = `${location.origin}/models/`
       onProgress?.('Loading Whisper model…')
-      return pipeline('automatic-speech-recognition', 'onnx-community/whisper-tiny.en', {
-        dtype: 'q8',
-      })
+      return pipeline('automatic-speech-recognition', id, { dtype: 'q8' })
     })()
-    pipelinePromise.catch(() => { pipelinePromise = null })
+    pipelines.set(model, p)
+    p.catch(() => pipelines.delete(model))
   }
-  return pipelinePromise
+  return p
 }
 
 /** Decode an asset's audio to 16kHz mono — Whisper's expected input. */
@@ -61,12 +85,14 @@ export async function transcribe(
   const audio = await decodeTo16k(assetId)
   if (!audio) throw new Error('This asset has no decodable audio track.')
 
-  const asr = await getPipeline(onProgress)
+  const model = getCaptionModel()
+  const asr = await getPipeline(model, onProgress)
   onProgress?.('Transcribing…')
   const result = await asr(audio, {
     return_timestamps: 'word',
     chunk_length_s: 30,
     stride_length_s: 5,
+    ...(model === 'multilingual' ? { language: null, task: 'transcribe' } : {}),
   })
 
   const words: TranscriptWord[] = []

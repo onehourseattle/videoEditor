@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useEditor, emptyProject } from '../state/store'
 import {
-  listProjects, loadProjectRecord, deleteProjectRecord, duplicateProjectRecord, saveProjectRecord,
+  listProjects, listTemplates, loadProjectRecord, deleteProjectRecord, duplicateProjectRecord,
+  saveProjectRecord, saveAsTemplate, projectFromTemplate,
   type ProjectSummary,
 } from '../state/persistence'
+import { BUILTIN_TEMPLATES } from '../state/builtinTemplates'
 import { assetStore } from '../state/assetStore'
 import { formatTime } from '../utils/time'
 import { uid } from '../utils/id'
@@ -13,9 +15,44 @@ export function ProjectsModal() {
   const toast = useEditor((s) => s.toast)
   const currentId = useEditor((s) => s.project.id)
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null)
+  const [templates, setTemplates] = useState<ProjectSummary[]>([])
 
-  const refresh = () => void listProjects().then(setProjects)
+  const refresh = () => {
+    void listProjects().then(setProjects)
+    void listTemplates().then(setTemplates)
+  }
   useEffect(refresh, [])
+
+  const openFresh = async (proj: ReturnType<typeof emptyProject>) => {
+    const s = useEditor.getState()
+    await saveProjectRecord(s.project)
+    s.replaceProject(proj)
+    await saveProjectRecord(proj)
+    setProjectsOpen(false)
+  }
+
+  const useBuiltin = (idx: number) => {
+    const proj = BUILTIN_TEMPLATES[idx].build()
+    void openFresh(proj)
+    toast(`"${proj.name}" ready — drop your footage on the Video track`, 'ok')
+  }
+
+  const useSaved = async (id: string) => {
+    const proj = await projectFromTemplate(id, uid('proj'))
+    if (!proj) return
+    const { assets } = await assetStore.rehydrateAssets(proj.assets)
+    await openFresh({ ...proj, assets })
+    toast(`Template applied — this is a fresh project`, 'ok')
+  }
+
+  const saveTemplate = async () => {
+    const s = useEditor.getState()
+    const name = prompt('Template name:', `${s.project.name || 'My'} template`)
+    if (!name) return
+    await saveAsTemplate(s.project, name, uid('tpl'))
+    refresh()
+    toast(`Template "${name}" saved — reuse it from this menu`, 'ok')
+  }
 
   const openProject = async (id: string) => {
     if (id === currentId) {
@@ -86,6 +123,34 @@ export function ProjectsModal() {
             ))}
           </div>
         )}
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <h2 style={{ flex: 1, fontSize: 14 }}>Templates</h2>
+          <button className="small" onClick={() => void saveTemplate()}>＋ Save current as template</button>
+        </div>
+        <div className="preset-grid">
+          {BUILTIN_TEMPLATES.map((t, i) => (
+            <div key={t.name} className="preset-card" onClick={() => useBuiltin(i)}>
+              {t.name}
+              <div className="sub">{t.sub}</div>
+            </div>
+          ))}
+          {templates.map((t) => (
+            <div key={t.id} className="preset-card" onClick={() => void useSaved(t.id)}>
+              {t.name}
+              <div className="sub">
+                yours · {formatTime(t.duration)}{' '}
+                <button
+                  className="small ghost"
+                  style={{ padding: '0 4px' }}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    if (confirm(`Delete template "${t.name}"?`)) void deleteProjectRecord(t.id).then(refresh)
+                  }}
+                >🗑</button>
+              </div>
+            </div>
+          ))}
+        </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
           <button onClick={() => setProjectsOpen(false)}>Close</button>
         </div>
