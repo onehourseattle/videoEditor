@@ -1,5 +1,6 @@
 import type { AssetMeta } from '../types/model'
 import { uid } from '../utils/id'
+import { idb } from './db'
 
 /**
  * Holds the binary side of assets (Blobs + decoded helpers) outside of the
@@ -18,6 +19,7 @@ class AssetStore {
     const id = uid('asset')
     const url = URL.createObjectURL(file)
     this.blobs.set(id, file)
+    void idb.put('blobs', id, file) // persist so reloads never ask to re-link
 
     if (file.type.startsWith('video')) {
       const video = document.createElement('video')
@@ -134,7 +136,47 @@ class AssetStore {
     return p
   }
 
+  /**
+   * Restore asset blobs from IndexedDB after a reload: recreate object URLs
+   * and decoded elements. Returns updated metas + ids whose blobs are gone
+   * (cleared site data) and need a manual re-import.
+   */
+  async rehydrateAssets(assets: Record<string, AssetMeta>): Promise<{ assets: Record<string, AssetMeta>; missing: string[] }> {
+    const out: Record<string, AssetMeta> = {}
+    const missing: string[] = []
+    for (const [id, meta] of Object.entries(assets)) {
+      if (meta.url && this.blobs.has(id)) {
+        out[id] = meta
+        continue
+      }
+      const blob = await idb.get<Blob>('blobs', id)
+      if (!blob) {
+        missing.push(id)
+        out[id] = { ...meta, url: '' }
+        continue
+      }
+      this.blobs.set(id, blob)
+      const url = URL.createObjectURL(blob)
+      out[id] = { ...meta, url, thumbnail: meta.type === 'image' ? url : meta.thumbnail }
+      if (meta.type === 'image') {
+        const img = new Image()
+        img.src = url
+        this.images.set(id, img)
+      }
+    }
+    return { assets: out, missing }
+  }
+
+  /** Register an imported blob under an existing (re-linked) asset id too. */
+  adopt(sourceId: string, targetId: string) {
+    const blob = this.blobs.get(sourceId)
+    if (!blob) return
+    this.blobs.set(targetId, blob)
+    void idb.put('blobs', targetId, blob)
+  }
+
   remove(id: string) {
+    void idb.delete('blobs', id)
     this.filmstrips.delete(id)
     this.waveforms.delete(id)
     const blob = this.blobs.get(id)

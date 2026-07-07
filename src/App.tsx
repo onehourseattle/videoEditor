@@ -1,6 +1,9 @@
 import { useEffect } from 'react'
-import { useEditor, projectDuration, type PanelTab } from './state/store'
-import { autosave, loadAutosave } from './state/persistence'
+import { useEditor, type PanelTab } from './state/store'
+import {
+  saveProjectRecord, loadProjectRecord, loadLegacyAutosave, lastProjectId,
+} from './state/persistence'
+import { assetStore } from './state/assetStore'
 import { TopBar } from './components/TopBar'
 import { Preview } from './components/Preview'
 import { Timeline } from './components/Timeline'
@@ -12,7 +15,9 @@ import { StickersPanel } from './components/panels/StickersPanel'
 import { AIPanel } from './components/panels/AIPanel'
 import { ScriptPanel } from './components/panels/ScriptPanel'
 import { ExportDialog } from './components/ExportDialog'
+import { ExportTray } from './components/ExportTray'
 import { HelpOverlay } from './components/HelpOverlay'
+import { ProjectsModal } from './components/ProjectsModal'
 import { Toasts } from './components/Toasts'
 import { useShortcuts } from './hooks/useShortcuts'
 
@@ -32,25 +37,35 @@ export function App() {
   const setPanel = useEditor((s) => s.setPanel)
   const exportOpen = useEditor((s) => s.exportOpen)
   const helpOpen = useEditor((s) => s.helpOpen)
+  const projectsOpen = useEditor((s) => s.projectsOpen)
   const project = useEditor((s) => s.project)
 
   useShortcuts()
 
-  // restore the last session once on boot (media re-links by filename on import)
+  // restore the last project once on boot — media blobs rehydrate from IndexedDB
   useEffect(() => {
     if (restoredOnce) return
     restoredOnce = true
-    const s = useEditor.getState()
-    const saved = loadAutosave()
-    const currentEmpty = projectDuration(s.project) === 0 && Object.keys(s.project.assets).length === 0
-    if (saved && currentEmpty && (projectDuration(saved) > 0 || Object.keys(saved.assets).length > 0)) {
-      s.replaceProject(saved)
-    }
+    void (async () => {
+      const s = useEditor.getState()
+      const last = lastProjectId()
+      let saved = last ? await loadProjectRecord(last) : null
+      if (!saved) saved = loadLegacyAutosave()
+      if (!saved) {
+        await saveProjectRecord(s.project) // register the fresh project
+        return
+      }
+      const { assets, missing } = await assetStore.rehydrateAssets(saved.assets)
+      s.replaceProject({ ...saved, assets })
+      if (missing.length) {
+        s.toast(`${missing.length} media file(s) missing — re-import them in the Media panel`, 'error')
+      }
+    })()
   }, [])
 
-  // debounced autosave
+  // debounced autosave into the project's IndexedDB record
   useEffect(() => {
-    const id = setTimeout(() => autosave(project), 800)
+    const id = setTimeout(() => void saveProjectRecord(project), 800)
     return () => clearTimeout(id)
   }, [project])
 
@@ -89,6 +104,8 @@ export function App() {
       </div>
       {exportOpen && <ExportDialog />}
       {helpOpen && <HelpOverlay />}
+      {projectsOpen && <ProjectsModal />}
+      <ExportTray />
       <Toasts />
     </div>
   )

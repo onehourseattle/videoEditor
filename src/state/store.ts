@@ -55,6 +55,7 @@ interface EditorState {
   snapping: boolean
   exportOpen: boolean
   helpOpen: boolean
+  projectsOpen: boolean
   busy: string | null // global progress message ('Transcribing… 40%')
   toasts: Toast[]
   theme: Theme
@@ -72,6 +73,7 @@ interface EditorState {
   toggleSnapping: () => void
   setExportOpen: (open: boolean) => void
   setHelpOpen: (open: boolean) => void
+  setProjectsOpen: (open: boolean) => void
   setBusy: (msg: string | null) => void
   select: (ids: string[]) => void
   toast: (msg: string, kind?: Toast['kind']) => void
@@ -95,6 +97,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   snapping: true,
   exportOpen: false,
   helpOpen: false,
+  projectsOpen: false,
   busy: null,
   toasts: [],
   theme: initialTheme(),
@@ -109,6 +112,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   toggleSnapping: () => set((s) => ({ snapping: !s.snapping })),
   setExportOpen: (exportOpen) => set({ exportOpen }),
   setHelpOpen: (helpOpen) => set({ helpOpen }),
+  setProjectsOpen: (projectsOpen) => set({ projectsOpen }),
   setBusy: (busy) => set({ busy }),
   select: (selectedClipIds) => set({ selectedClipIds }),
 

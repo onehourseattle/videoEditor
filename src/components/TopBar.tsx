@@ -1,6 +1,7 @@
 import { useRef } from 'react'
-import { useEditor, emptyProject } from '../state/store'
+import { useEditor } from '../state/store'
 import { loadProjectFile, saveProjectFile } from '../state/persistence'
+import { assetStore } from '../state/assetStore'
 import { ASPECT_PRESETS } from '../types/model'
 
 export function TopBar() {
@@ -13,6 +14,7 @@ export function TopBar() {
   const replaceProject = useEditor((s) => s.replaceProject)
   const setExportOpen = useEditor((s) => s.setExportOpen)
   const setHelpOpen = useEditor((s) => s.setHelpOpen)
+  const setProjectsOpen = useEditor((s) => s.setProjectsOpen)
   const undo = useEditor((s) => s.undo)
   const redo = useEditor((s) => s.redo)
   const canUndo = useEditor((s) => s.past.length > 0)
@@ -56,9 +58,9 @@ export function TopBar() {
         {theme === 'dark' ? '☀️' : '🌙'}
       </button>
       <button className="ghost" onClick={() => setHelpOpen(true)} title="Keyboard shortcuts (?)">?</button>
-      <button onClick={() => { if (confirm('Start a new project? Unsaved work is kept in autosave.')) replaceProject(emptyProject()) }}>New</button>
-      <button onClick={() => fileRef.current?.click()}>Open</button>
-      <button onClick={() => { saveProjectFile(project); toast('Project saved as JSON', 'ok') }}>Save</button>
+      <button onClick={() => setProjectsOpen(true)}>Projects</button>
+      <button className="ghost" onClick={() => fileRef.current?.click()} title="Import a .cutroom.json project file">Open file</button>
+      <button className="ghost" onClick={() => { saveProjectFile(project); toast('Project exported as JSON (autosave is automatic)', 'ok') }} title="Export project as a JSON file">Save file</button>
       <button className="primary" onClick={() => setExportOpen(true)}>Export</button>
       <input
         ref={fileRef}
@@ -69,8 +71,15 @@ export function TopBar() {
           const f = e.target.files?.[0]
           if (!f) return
           try {
-            replaceProject(await loadProjectFile(f))
-            toast('Project loaded — re-import its media files (same names) to re-link them', 'info')
+            const proj = await loadProjectFile(f)
+            const { assets, missing } = await assetStore.rehydrateAssets(proj.assets)
+            replaceProject({ ...proj, assets })
+            toast(
+              missing.length
+                ? `Project loaded — re-import ${missing.length} media file(s) (same names) to re-link`
+                : 'Project loaded',
+              missing.length ? 'info' : 'ok',
+            )
           } catch (err) {
             toast(`Could not open project: ${err instanceof Error ? err.message : err}`, 'error')
           }

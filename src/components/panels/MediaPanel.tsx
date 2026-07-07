@@ -22,6 +22,7 @@ export function MediaPanel() {
         const meta = await assetStore.importFile(file)
         if (orphan) {
           const relinked: AssetMeta = { ...meta, id: orphan.id }
+          assetStore.adopt(meta.id, orphan.id) // blob must answer to the re-linked id too
           updateProject((p) => ({ ...p, assets: { ...p.assets, [orphan.id]: relinked } }))
           toast(`Re-linked ${file.name}`, 'ok')
         } else {
