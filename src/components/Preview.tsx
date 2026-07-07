@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Clip, Project } from '../types/model'
 import { useEditor, projectDuration, findClip, replaceClip } from '../state/store'
 import { renderFrame } from '../engine/compositor'
@@ -46,6 +46,65 @@ function isDirectlyEditable(kind: Clip['kind']): boolean {
   return kind !== 'audio'
 }
 
+/**
+ * Safe-zone guides and a vertical-platform UI mockup (TikTok/Reels/Shorts-style
+ * action rail + caption zone) so captions never hide behind the like button.
+ * Preview chrome only — the exporter never sees this.
+ */
+function drawOverlay(ctx: CanvasRenderingContext2D, mode: 'guides' | 'platform', w: number, h: number) {
+  ctx.save()
+  if (mode === 'guides') {
+    // action-safe (5%) and title-safe (10%) rectangles + thirds
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)'
+    ctx.setLineDash([6, 6])
+    ctx.lineWidth = 1
+    ctx.strokeRect(w * 0.05, h * 0.05, w * 0.9, h * 0.9)
+    ctx.strokeStyle = 'rgba(255,200,60,0.6)'
+    ctx.strokeRect(w * 0.1, h * 0.1, w * 0.8, h * 0.8)
+    ctx.setLineDash([])
+    ctx.strokeStyle = 'rgba(255,255,255,0.22)'
+    for (const f of [1 / 3, 2 / 3]) {
+      ctx.beginPath(); ctx.moveTo(w * f, 0); ctx.lineTo(w * f, h); ctx.stroke()
+      ctx.beginPath(); ctx.moveTo(0, h * f); ctx.lineTo(w, h * f); ctx.stroke()
+    }
+  } else {
+    // danger zones where platform UI covers content
+    ctx.fillStyle = 'rgba(255,70,70,0.16)'
+    ctx.fillRect(0, 0, w, h * 0.07) // status/search bar
+    ctx.fillRect(w * 0.82, h * 0.38, w * 0.18, h * 0.42) // action rail
+    ctx.fillRect(0, h * 0.8, w, h * 0.2) // caption/CTA + nav zone
+    // mock action rail icons
+    ctx.fillStyle = 'rgba(255,255,255,0.85)'
+    const cx = w * 0.91
+    for (const [i, glyph] of ['♥', '💬', '↗', '♫'].entries()) {
+      const cy = h * (0.44 + i * 0.1)
+      ctx.beginPath()
+      ctx.arc(cx, cy, Math.min(w, h) * 0.032, 0, Math.PI * 2)
+      ctx.fillStyle = 'rgba(0,0,0,0.35)'
+      ctx.fill()
+      ctx.fillStyle = 'rgba(255,255,255,0.9)'
+      ctx.font = `${Math.round(Math.min(w, h) * 0.036)}px sans-serif`
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(glyph, cx, cy)
+    }
+    // mock username/caption block
+    ctx.textAlign = 'left'
+    ctx.fillStyle = 'rgba(255,255,255,0.8)'
+    ctx.font = `bold ${Math.round(w * 0.032)}px sans-serif`
+    ctx.fillText('@yourhandle', w * 0.05, h * 0.835)
+    ctx.fillStyle = 'rgba(255,255,255,0.55)'
+    ctx.font = `${Math.round(w * 0.028)}px sans-serif`
+    ctx.fillText('Caption and #hashtags render here…', w * 0.05, h * 0.865)
+    ctx.fillStyle = 'rgba(255,255,255,0.5)'
+    ctx.font = `${Math.round(w * 0.026)}px sans-serif`
+    ctx.fillText('⚠ keep your text out of the tinted zones', w * 0.05, h * 0.055)
+  }
+  ctx.restore()
+}
+
+type OverlayMode = 'none' | 'guides' | 'platform'
+
 export function Preview() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const playing = useEditor((s) => s.playing)
@@ -53,14 +112,17 @@ export function Preview() {
   const project = useEditor((s) => s.project)
   const duration = projectDuration(project)
   const isEmpty = duration === 0 && Object.keys(project.assets).length === 0
+  const [overlayMode, setOverlayMode] = useState<OverlayMode>('none')
+  const overlayRef = useRef<OverlayMode>('none')
+  const lastChangeRef = useRef(performance.now())
+  overlayRef.current = overlayMode
 
   useEffect(() => {
     let raf = 0
     // Dirty-flag rendering: paint continuously while playing, and for a short
     // window after any state/size change (covers async <video> seeks), then idle.
-    let lastChange = performance.now()
-    const unsub = useEditor.subscribe(() => { lastChange = performance.now() })
-    const ro = new ResizeObserver(() => { lastChange = performance.now() })
+    const unsub = useEditor.subscribe(() => { lastChangeRef.current = performance.now() })
+    const ro = new ResizeObserver(() => { lastChangeRef.current = performance.now() })
     if (canvasRef.current) ro.observe(canvasRef.current)
 
     const draw = () => {
@@ -68,7 +130,7 @@ export function Preview() {
       const canvas = canvasRef.current
       if (!canvas) return
       const s = useEditor.getState()
-      if (!s.playing && performance.now() - lastChange > 700) return
+      if (!s.playing && performance.now() - lastChangeRef.current > 700) return
 
       const { width: W, height: H } = s.project
       // Render only the pixels actually displayed (capped at project res) —
@@ -86,6 +148,9 @@ export function Preview() {
       }
       const ctx = canvas.getContext('2d')!
       renderFrame(ctx, s.project, s.currentTime, previewFrames, bw / W)
+
+      // platform overlay / safe zones (preview-only, never exported)
+      if (overlayRef.current !== 'none') drawOverlay(ctx, overlayRef.current, bw, bh)
 
       // selection outline (preview-only chrome; the exporter never draws this)
       if (!s.playing && s.selectedClipIds.length === 1) {
@@ -227,6 +292,12 @@ export function Preview() {
       })))
   }
 
+  const cycleOverlay = () => {
+    const next: OverlayMode = overlayMode === 'none' ? 'guides' : overlayMode === 'guides' ? 'platform' : 'none'
+    setOverlayMode(next)
+    lastChangeRef.current = performance.now()
+  }
+
   return (
     <>
       <div className="preview-wrap">
@@ -237,6 +308,15 @@ export function Preview() {
           onPointerDown={onPointerDown}
           onWheel={onWheel}
         />
+        {!isEmpty && (
+          <button
+            className="small overlay-toggle"
+            onClick={cycleOverlay}
+            title="Cycle: safe-zone guides → platform UI mockup → off"
+          >
+            {overlayMode === 'none' ? '⊞ Guides' : overlayMode === 'guides' ? '📱 Platform UI' : '✕ Overlay off'}
+          </button>
+        )}
         {isEmpty && (
           <div className="empty-state">
             <div className="empty-logo">Cut<span>Room</span></div>

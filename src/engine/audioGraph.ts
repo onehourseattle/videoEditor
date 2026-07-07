@@ -1,5 +1,6 @@
 import type { AudioClip, Project, VideoClip } from '../types/model'
 import { assetStore } from '../state/assetStore'
+import { sampleKeyframes } from './keyframes'
 
 type AudibleClip = (VideoClip | AudioClip) & { trackMuted: boolean }
 
@@ -45,8 +46,22 @@ export async function scheduleAudio(
     src.connect(gain)
     gain.connect(destination)
 
-    // fades (audio clips only)
-    if (clip.kind === 'audio') {
+    // volume envelope (ducking, manual keyframes) — sampled onto the gain param
+    if (clip.gain && clip.gain.length > 1) {
+      const startCtx = when + Math.max(0, clip.start - from)
+      const skip = Math.max(0, from - clip.start)
+      const span = clip.duration - skip
+      if (span > 0.05) {
+        const steps = Math.min(512, Math.max(8, Math.ceil(span / 0.05)))
+        const curve = new Float32Array(steps)
+        for (let i = 0; i < steps; i++) {
+          const local = skip + (i / (steps - 1)) * span
+          curve[i] = Math.max(0.0001, clip.volume * sampleKeyframes(clip.gain, local))
+        }
+        gain.gain.setValueCurveAtTime(curve, startCtx, span)
+      }
+    } else if (clip.kind === 'audio') {
+      // fades (audio clips only; envelope supersedes them)
       const startCtx = when + Math.max(0, clip.start - from)
       if (clip.fadeIn > 0) {
         gain.gain.setValueAtTime(0.0001, startCtx)

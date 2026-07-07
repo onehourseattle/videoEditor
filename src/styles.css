@@ -372,6 +372,15 @@ button:active:not(:disabled) { transform: scale(0.97); }
 .preset-card:active, .media-item:active { transform: scale(0.97); }
 .media-item[draggable='true'] { cursor: grab; }
 
+/* ── preview overlay toggle + preflight ── */
+.overlay-toggle { position: absolute; top: 24px; left: 24px; z-index: 5; opacity: 0.85; }
+.overlay-toggle:hover { opacity: 1; }
+.preflight { display: flex; flex-direction: column; gap: 4px; }
+.pf-row { display: flex; gap: 8px; font-size: 12px; align-items: baseline; }
+.pf-row.ok span { color: var(--ok); }
+.pf-row.warn { color: var(--text-dim); }
+.pf-row.warn span { color: #e8a33d; }
+
 /* ── transcript editor ── */
 .transcript { display: flex; flex-direction: column; gap: 10px; }
 .tr-block {

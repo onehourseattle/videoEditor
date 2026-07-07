@@ -40,7 +40,10 @@ export function MediaPanel() {
   const addToTimeline = (asset: AssetMeta) => {
     const p = useEditor.getState().project
     const clip = makeClipFromAsset(asset, 0)
-    const track = p.tracks.find((t) => trackAccepts(clip, t) && !t.locked)
+    // footage prefers the base video track; overlays are for graphics
+    const track =
+      p.tracks.find((t) => t.kind === (asset.type === 'audio' ? 'audio' : 'video') && !t.locked) ??
+      p.tracks.find((t) => trackAccepts(clip, t) && !t.locked)
     if (!track) {
       toast('No unlocked compatible track for this media', 'error')
       return

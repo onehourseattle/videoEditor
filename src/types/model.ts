@@ -94,6 +94,8 @@ export interface VideoClip extends ClipBase {
   speed: number
   volume: number
   muted: boolean
+  /** optional volume envelope (multiplies `volume`); times relative to clip start */
+  gain?: Keyframe[]
 }
 
 export interface ImageClip extends ClipBase {
@@ -110,6 +112,8 @@ export interface AudioClip extends ClipBase {
   muted: boolean
   fadeIn: number
   fadeOut: number
+  /** optional volume envelope (multiplies `volume`); times relative to clip start */
+  gain?: Keyframe[]
 }
 
 // ─── Text & captions ─────────────────────────────────────────────────────────

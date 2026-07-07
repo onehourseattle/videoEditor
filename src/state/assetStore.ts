@@ -96,6 +96,28 @@ class AssetStore {
     return v
   }
 
+  private originalAudio = new Map<string, AudioBuffer>()
+
+  /** Swap in a processed mix (e.g. denoised) for an asset; original kept for undo. */
+  setProcessedAudio(id: string, processed: AudioBuffer) {
+    const current = this.audioBuffers.get(id)
+    if (current && !this.originalAudio.has(id)) this.originalAudio.set(id, current)
+    this.audioBuffers.set(id, processed)
+  }
+
+  /** True if this asset is playing a processed (e.g. denoised) mix. */
+  hasProcessedAudio(id: string): boolean {
+    return this.originalAudio.has(id)
+  }
+
+  restoreOriginalAudio(id: string) {
+    const original = this.originalAudio.get(id)
+    if (original) {
+      this.audioBuffers.set(id, original)
+      this.originalAudio.delete(id)
+    }
+  }
+
   /** Decode full audio track (from video or audio assets) for mixing/analysis. */
   async getAudioBuffer(id: string, ctx: BaseAudioContext): Promise<AudioBuffer | null> {
     const cached = this.audioBuffers.get(id)

@@ -218,6 +218,16 @@ export function splitClipAt(p: Project, clipId: string, t: number): Project {
 
   if (right.kind === 'video' || right.kind === 'audio') {
     right.offset = right.offset + local * right.speed
+    if (right.gain) {
+      right.gain = right.gain.filter((k) => k.t >= local).map((k) => ({ ...k, t: k.t - local }))
+      if (right.gain.length < 2) right.gain = undefined
+    }
+    if (left.kind === 'video' || left.kind === 'audio') {
+      if (left.gain) {
+        left.gain = left.gain.filter((k) => k.t <= local)
+        if (left.gain.length < 2) left.gain = undefined
+      }
+    }
   }
   if (right.kind === 'caption') {
     right.words = clip.kind === 'caption'

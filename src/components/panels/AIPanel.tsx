@@ -1,6 +1,9 @@
 import { useState } from 'react'
-import { useEditor, findClip, splitClipAt } from '../../state/store'
+import { useEditor, findClip, splitClipAt, replaceClip } from '../../state/store'
 import { createScriptApi } from '../../scripting/api'
+import { speechActivity, duckKeyframes, denoiseAsset, DEFAULT_DUCK } from '../../ai/audioPro'
+import { findShortSegments, createShortsProjects } from '../../ai/shorts'
+import { assetStore } from '../../state/assetStore'
 
 /**
  * One-click local AI tools. Each action targets the selected video clip
@@ -50,6 +53,90 @@ export function AIPanel() {
   }
 
   const tools: { title: string; desc: string; action: () => Promise<void> }[] = [
+    {
+      title: '⭐️ Auto edit (one click)',
+      desc: 'The whole pipeline: cut silences → cut filler words → generate captions → add gentle punch-in zooms. Filler/caption steps are skipped gracefully if the Whisper model isn\'t bundled.',
+      action: run('Auto edit', async (api, id) => {
+        await api.removeSilences(id)
+        let captioned = false
+        try {
+          await api.removeFillerWords(id)
+          await api.autoCaption(id)
+          captioned = true
+        } catch {
+          api.log('Whisper model not bundled — skipped filler words + captions (run `npm run fetch-models`)')
+        }
+        // punch-in zooms: alternate 1.0 / 1.06 on each video clip for subtle energy
+        const vids = api.clips({ kind: 'video' })
+        vids.forEach((c, i) => {
+          api.keyframe(c.id, 'scale', 0, i % 2 === 0 ? 1.0 : 1.06)
+          api.keyframe(c.id, 'scale', Math.max(0.2, c.duration), i % 2 === 0 ? 1.06 : 1.0)
+        })
+        api.log(`Auto edit done: ${vids.length} clips${captioned ? ' + captions' : ''}`)
+      }),
+    },
+    {
+      title: '✂️➡️📱 Long video → Shorts',
+      desc: 'Finds the 3 most engaging moments (energy-scored, cuts snapped to natural pauses) and creates a ready-to-edit 9:16 project for each — see the Projects menu.',
+      action: run('Shorts splitter', async (api, id) => {
+        const s = useEditor.getState()
+        const found = findClip(s.project, id)
+        if (!found || found.clip.kind !== 'video') return
+        const assetDur = s.project.assets[found.clip.assetId]?.duration ?? 30
+        const targetLen = Math.max(2, Math.min(30, assetDur / 2.5))
+        const segs = await findShortSegments(found.clip.assetId, targetLen, 3)
+        if (!segs.length) throw new Error('Could not find distinct segments — clip may be too short')
+        const names = await createShortsProjects(s.project, found.clip, segs)
+        api.log(`Created ${names.length} Shorts projects: ${names.join(' · ')}`)
+        s.toast(`${names.length} Shorts created — open them from Projects`, 'ok')
+      }),
+    },
+    {
+      title: '🎚 Auto-duck music',
+      desc: 'Detects speech in your footage and dips every music track under it (with smooth attack/release). Volume envelopes land on the audio clips — undoable.',
+      action: run('Auto-duck', async (api) => {
+        const s = useEditor.getState()
+        const activity = await speechActivity(s.project)
+        if (!activity.some((a) => a.active)) throw new Error('No speech detected in video clips')
+        let ducked = 0
+        s.updateProject((p) => {
+          let next = p
+          for (const track of p.tracks) {
+            if (track.kind !== 'audio') continue
+            for (const c of track.clips) {
+              if (c.kind !== 'audio') continue
+              const kfs = duckKeyframes(c, activity, DEFAULT_DUCK)
+              if (kfs.length) {
+                next = replaceClip(next, c.id, (cl) => (cl.kind === 'audio' ? { ...cl, gain: kfs } : cl))
+                ducked++
+              }
+            }
+          }
+          return next
+        })
+        if (!ducked) throw new Error('No music clips on audio tracks to duck')
+        api.log(`Ducked ${ducked} music clip(s) under speech`)
+      }),
+    },
+    {
+      title: '🧹 Reduce noise',
+      desc: 'Spectral noise gate: learns the room tone from the quietest moments and subtracts it — hiss, hum and fan noise drop away. Applies to playback and export; restorable.',
+      action: run('Noise reduction', async (api, id) => {
+        const s = useEditor.getState()
+        const found = findClip(s.project, id)
+        if (!found || found.clip.kind !== 'video') return
+        const assetId = found.clip.assetId
+        if (assetStore.hasProcessedAudio(assetId)) {
+          assetStore.restoreOriginalAudio(assetId)
+          api.log('Restored the original (unprocessed) audio')
+          return
+        }
+        const cleaned = await denoiseAsset(assetId, 1.0)
+        if (!cleaned) throw new Error('No decodable audio on this clip')
+        assetStore.setProcessedAudio(assetId, cleaned)
+        api.log('Noise reduced — run again to restore the original')
+      }),
+    },
     {
       title: '💬 Auto captions',
       desc: 'Transcribes speech with on-device Whisper and adds karaoke-style word-timed captions. Requires the bundled model: run `npm run fetch-models` once. Zero network at runtime.',

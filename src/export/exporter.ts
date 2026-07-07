@@ -11,6 +11,8 @@ export interface ExportSettings {
   fps: number
   videoBitrate: number // bps
   includeAudio: boolean
+  /** normalize the final mix to -14 LUFS (platform loudness target) */
+  normalizeAudio?: boolean
 }
 
 export interface ExportProgress {
@@ -89,6 +91,11 @@ export async function exportProject(
     const offline = new OfflineAudioContext(2, Math.ceil(duration * AUDIO_SAMPLE_RATE), AUDIO_SAMPLE_RATE)
     await scheduleAudio(offline, offline.destination, project, 0, 0)
     audioBuffer = await offline.startRendering()
+    if (settings.normalizeAudio !== false) {
+      const { normalizationGain, applyGain } = await import('../ai/audioPro')
+      const { gain } = normalizationGain(audioBuffer, -14)
+      if (Math.abs(gain - 1) > 0.01) applyGain(audioBuffer, gain)
+    }
     onProgress({ phase: 'audio', progress: 1 })
   }
 

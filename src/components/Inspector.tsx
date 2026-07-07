@@ -67,6 +67,15 @@ export function Inspector() {
               onChange={(e) => edit((c) => ('muted' in c ? { ...c, muted: e.target.checked } : c))} />
             Muted
           </label>
+          {clip.gain && clip.gain.length > 1 && (
+            <div className="row" style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+              🎚 Volume envelope: {clip.gain.length} points
+              <button className="small ghost"
+                onClick={() => edit((c) => (c.kind === 'video' || c.kind === 'audio' ? { ...c, gain: undefined } : c))}>
+                Clear
+              </button>
+            </div>
+          )}
         </>
       )}
 
