@@ -5,6 +5,7 @@ import {
 } from '../state/store'
 import { assetStore } from '../state/assetStore'
 import { makeClipFromAsset, trackAccepts, ASSET_DRAG_MIME } from '../state/clipFactory'
+import { copySelectedClip, pasteStyleToSelection, hasStyle } from '../state/clipboard'
 import { playback } from '../engine/playback'
 import { formatTime } from '../utils/time'
 import { uid } from '../utils/id'
@@ -216,6 +217,16 @@ function ClipMenu({ menu, close }: { menu: MenuState; close: () => void }) {
       })}
       {canMute && item(('muted' in clip && clip.muted) ? '🔊 Unmute' : '🔇 Mute', () => {
         updateProject((p) => replaceClip(p, clip.id, (c) => ('muted' in c ? { ...c, muted: !c.muted } : c)))
+      })}
+      {item('📋 Copy (style + clip)', () => {
+        select([clip.id])
+        copySelectedClip()
+        useEditor.getState().toast('Copied — ⌘V pastes the clip, ⌥⌘V pastes its style', 'info')
+      })}
+      {hasStyle() && item('🎨 Paste style', () => {
+        select([clip.id])
+        const n = pasteStyleToSelection()
+        if (n) useEditor.getState().toast('Style applied', 'ok')
       })}
       {clip.transition && item('◇ Remove transition', () => {
         updateProject((p) => replaceClip(p, clip.id, (c) => ({ ...c, transition: undefined })))

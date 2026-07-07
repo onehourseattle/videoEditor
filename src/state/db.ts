@@ -1,10 +1,11 @@
 /**
- * Minimal IndexedDB wrapper — no dependencies. Two stores:
+ * Minimal IndexedDB wrapper — no dependencies. Stores:
  *  - 'blobs':    assetId → media Blob (survives reloads; media never re-links)
  *  - 'projects': projectId → ProjectRecord (multi-project autosave)
+ *  - 'fonts':    family → { family, data: ArrayBuffer } (user-imported fonts)
  */
 const DB_NAME = 'cutroom'
-const DB_VERSION = 1
+const DB_VERSION = 2
 
 let dbPromise: Promise<IDBDatabase> | null = null
 
@@ -16,6 +17,7 @@ function openDb(): Promise<IDBDatabase> {
         const db = req.result
         if (!db.objectStoreNames.contains('blobs')) db.createObjectStore('blobs')
         if (!db.objectStoreNames.contains('projects')) db.createObjectStore('projects')
+        if (!db.objectStoreNames.contains('fonts')) db.createObjectStore('fonts')
       }
       req.onsuccess = () => resolve(req.result)
       req.onerror = () => reject(req.error ?? new Error('IndexedDB unavailable'))

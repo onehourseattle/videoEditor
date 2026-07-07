@@ -372,6 +372,27 @@ button:active:not(:disabled) { transform: scale(0.97); }
 .preset-card:active, .media-item:active { transform: scale(0.97); }
 .media-item[draggable='true'] { cursor: grab; }
 
+/* ── transcript editor ── */
+.transcript { display: flex; flex-direction: column; gap: 10px; }
+.tr-block {
+  background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 10px;
+  padding: 8px 10px; display: flex; flex-direction: column; gap: 6px;
+}
+.tr-head { display: flex; align-items: center; gap: 4px; }
+.tr-time {
+  font-size: 11px; font-variant-numeric: tabular-nums; color: var(--accent-hover);
+  cursor: pointer; font-weight: 600;
+}
+.tr-time:hover { text-decoration: underline; }
+.tr-words { display: flex; flex-wrap: wrap; gap: 4px; user-select: text; -webkit-user-select: text; }
+.tr-word {
+  padding: 2px 6px; border-radius: 6px; font-size: 12.5px; line-height: 1.4;
+  background: var(--bg); border: 1px solid transparent; cursor: text; outline: none;
+  min-width: 8px;
+}
+.tr-word:hover { border-color: var(--border); }
+.tr-word:focus { border-color: var(--accent); background: var(--accent-soft); }
+
 /* ── export tray ── */
 .export-tray {
   position: fixed; right: 16px; bottom: 16px; z-index: 80; width: 300px;

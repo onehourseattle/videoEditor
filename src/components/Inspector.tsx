@@ -1,5 +1,7 @@
+import { useRef } from 'react'
 import type { Clip, Effect, TextStyle } from '../types/model'
 import { useEditor, findClip, replaceClip } from '../state/store'
+import { useFonts } from '../state/fonts'
 import { EFFECT_PRESETS } from '../engine/effects'
 import { TRANSITION_TYPES } from '../engine/transitions'
 import { setKeyframe, sampleKeyframes } from '../engine/keyframes'
@@ -220,8 +222,44 @@ function TextControls({ clip, edit }: { clip: Extract<Clip, { kind: 'text' }>; e
 }
 
 function StyleControls({ style, onChange }: { style: TextStyle; onChange: (s: TextStyle) => void }) {
+  const fonts = useFonts((s) => s.fonts)
+  const importFont = useFonts((s) => s.importFont)
+  const toast = useEditor((s) => s.toast)
+  const fontFileRef = useRef<HTMLInputElement>(null)
+  const knownFont = fonts.some((f) => f.family === style.fontFamily)
   return (
     <>
+      <div className="row">
+        <label className="field" style={{ flex: 1 }}>Font
+          <select
+            value={knownFont ? style.fontFamily : ''}
+            onChange={(e) => e.target.value && onChange({ ...style, fontFamily: e.target.value })}
+            style={{ fontFamily: style.fontFamily }}
+          >
+            {!knownFont && <option value="">{style.fontFamily.split(',')[0]}</option>}
+            {fonts.map((f) => (
+              <option key={f.family} value={f.family} style={{ fontFamily: f.family }}>{f.label}</option>
+            ))}
+          </select>
+        </label>
+        <button className="small" title="Import a .ttf / .otf / .woff2 font file" style={{ alignSelf: 'flex-end' }}
+          onClick={() => fontFileRef.current?.click()}>+ Font</button>
+        <input
+          ref={fontFileRef} type="file" hidden accept=".ttf,.otf,.woff,.woff2"
+          onChange={async (e) => {
+            const f = e.target.files?.[0]
+            if (!f) return
+            try {
+              const opt = await importFont(f)
+              onChange({ ...style, fontFamily: opt.family })
+              toast(`Font "${opt.label}" imported — stored locally`, 'ok')
+            } catch (err) {
+              toast(`Could not load font: ${err instanceof Error ? err.message : err}`, 'error')
+            }
+            e.target.value = ''
+          }}
+        />
+      </div>
       <div className="row">
         <label className="field">Size
           <input type="number" value={style.fontSize}

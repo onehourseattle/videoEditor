@@ -6,6 +6,8 @@ const SHORTCUTS: [string, string][] = [
   ['⌫ / Delete', 'Delete selected clips'],
   ['⌘Z / ⇧⌘Z', 'Undo / redo'],
   ['⌘D', 'Duplicate selected clip'],
+  ['⌘C / ⌘V', 'Copy clip / paste at playhead'],
+  ['⌥⌘V', 'Paste only the style onto selection'],
   ['← / →', 'Step one frame (⇧ = 10 frames)'],
   ['Home', 'Jump to start'],
   ['⌘ + scroll', 'Zoom the timeline at the cursor'],

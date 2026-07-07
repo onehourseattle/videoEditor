@@ -4,12 +4,14 @@ import {
   saveProjectRecord, loadProjectRecord, loadLegacyAutosave, lastProjectId,
 } from './state/persistence'
 import { assetStore } from './state/assetStore'
+import { loadFonts } from './state/fonts'
 import { TopBar } from './components/TopBar'
 import { Preview } from './components/Preview'
 import { Timeline } from './components/Timeline'
 import { Inspector } from './components/Inspector'
 import { MediaPanel } from './components/panels/MediaPanel'
 import { TextPanel } from './components/panels/TextPanel'
+import { CaptionsPanel } from './components/panels/CaptionsPanel'
 import { ChartsPanel } from './components/panels/ChartsPanel'
 import { StickersPanel } from './components/panels/StickersPanel'
 import { AIPanel } from './components/panels/AIPanel'
@@ -26,6 +28,7 @@ let restoredOnce = false
 const TABS: { id: PanelTab; icon: string; label: string }[] = [
   { id: 'media', icon: '🎬', label: 'Media' },
   { id: 'text', icon: '🅣', label: 'Text' },
+  { id: 'captions', icon: '💬', label: 'Caps' },
   { id: 'charts', icon: '📈', label: 'Charts' },
   { id: 'stickers', icon: '😀', label: 'Stick' },
   { id: 'ai', icon: '✨', label: 'AI' },
@@ -46,6 +49,7 @@ export function App() {
   useEffect(() => {
     if (restoredOnce) return
     restoredOnce = true
+    void loadFonts()
     void (async () => {
       const s = useEditor.getState()
       const last = lastProjectId()
@@ -90,6 +94,7 @@ export function App() {
           <aside className="panel">
             {activePanel === 'media' && <MediaPanel />}
             {activePanel === 'text' && <TextPanel />}
+            {activePanel === 'captions' && <CaptionsPanel />}
             {activePanel === 'charts' && <ChartsPanel />}
             {activePanel === 'stickers' && <StickersPanel />}
             {activePanel === 'ai' && <AIPanel />}

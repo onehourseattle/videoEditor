@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { useEditor, splitClipAt, removeClips, findClip, addClipToTrack } from '../state/store'
+import { copySelectedClip, pasteClipAtPlayhead, pasteStyleToSelection } from '../state/clipboard'
 import { playback } from '../engine/playback'
 import { uid } from '../utils/id'
 
@@ -34,6 +35,18 @@ export function useShortcuts() {
           s.updateProject((p) => removeClips(p, s.selectedClipIds))
           s.select([])
         }
+      } else if (meta && e.altKey && e.code === 'KeyV') {
+        // paste style onto selection (⌥⌘V) — before plain ⌘V
+        e.preventDefault()
+        const n = pasteStyleToSelection()
+        if (n) s.toast(`Style applied to ${n} clip(s)`, 'ok')
+      } else if (meta && e.code === 'KeyC') {
+        if (copySelectedClip()) {
+          e.preventDefault()
+          s.toast('Clip copied — ⌘V pastes it, ⌥⌘V pastes just its style', 'info')
+        }
+      } else if (meta && e.code === 'KeyV') {
+        if (pasteClipAtPlayhead()) e.preventDefault()
       } else if (meta && e.key === 'd') {
         e.preventDefault()
         for (const id of s.selectedClipIds) {

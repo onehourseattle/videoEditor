@@ -23,7 +23,7 @@ export function emptyProject(): Project {
   }
 }
 
-export type PanelTab = 'media' | 'text' | 'charts' | 'stickers' | 'ai' | 'script'
+export type PanelTab = 'media' | 'text' | 'captions' | 'charts' | 'stickers' | 'ai' | 'script'
 
 export interface Toast {
   id: string
