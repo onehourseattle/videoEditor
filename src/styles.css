@@ -448,6 +448,22 @@ button:active:not(:disabled) { transform: scale(0.97); }
 .pc-sub { font-size: 10.5px; color: var(--text-dim); margin-top: 2px; }
 .pc-actions { display: flex; flex-direction: column; gap: 2px; }
 
+/* ── shorts triage ── */
+.shorts-grid { display: flex; flex-direction: column; gap: 8px; max-height: 55vh; overflow-y: auto; }
+.shorts-card {
+  display: flex; align-items: center; gap: 12px; padding: 8px;
+  background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 10px;
+}
+.shorts-card img, .shorts-card .ph {
+  width: 96px; height: 54px; border-radius: 6px; object-fit: cover; flex: none;
+  background: var(--bg); display: flex; align-items: center; justify-content: center;
+}
+.sc-meta { flex: 1; min-width: 0; }
+.sc-title { font-weight: 600; font-size: 12.5px; }
+.sc-sub { font-size: 11px; color: var(--text-dim); margin: 2px 0 6px; }
+.sc-score { height: 5px; background: var(--bg); border-radius: 3px; overflow: hidden; max-width: 220px; }
+.sc-score > div { height: 100%; background: linear-gradient(90deg, var(--accent), #e66767); border-radius: 3px; }
+
 /* ── modal ── */
 .modal-backdrop {
   position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 50;

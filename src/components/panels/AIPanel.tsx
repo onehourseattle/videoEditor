@@ -2,8 +2,10 @@ import { useState } from 'react'
 import { useEditor, findClip, splitClipAt, replaceClip } from '../../state/store'
 import { createScriptApi } from '../../scripting/api'
 import { speechActivity, duckKeyframes, denoiseAsset, DEFAULT_DUCK } from '../../ai/audioPro'
-import { findShortSegments, createShortsProjects } from '../../ai/shorts'
+import { findShortSegments, createShortsProjects, captureSegmentThumbs, type ShortSegment } from '../../ai/shorts'
+import type { VideoClip } from '../../types/model'
 import { assetStore } from '../../state/assetStore'
+import { formatTime } from '../../utils/time'
 
 /**
  * One-click local AI tools. Each action targets the selected video clip
@@ -11,10 +13,17 @@ import { assetStore } from '../../state/assetStore'
  * Everything runs on-device: DSP for audio, frame-diff vision for video,
  * Whisper (ONNX) for speech.
  */
+interface ShortsCandidates {
+  clip: VideoClip
+  segments: ShortSegment[]
+  thumbs: string[]
+}
+
 export function AIPanel() {
   const setBusy = useEditor((s) => s.setBusy)
   const toast = useEditor((s) => s.toast)
   const [log, setLog] = useState<string[]>([])
+  const [shorts, setShorts] = useState<ShortsCandidates | null>(null)
 
   const targetClip = () => {
     const s = useEditor.getState()
@@ -77,18 +86,20 @@ export function AIPanel() {
     },
     {
       title: '✂️➡️📱 Long video → Shorts',
-      desc: 'Finds the 3 most engaging moments (energy-scored, cuts snapped to natural pauses) and creates a ready-to-edit 9:16 project for each — see the Projects menu.',
+      desc: 'Finds the most engaging moments (energy-scored, cuts snapped to natural pauses) and shows them as ranked cards — pick which become 9:16 projects.',
       action: run('Shorts splitter', async (api, id) => {
         const s = useEditor.getState()
         const found = findClip(s.project, id)
         if (!found || found.clip.kind !== 'video') return
-        const assetDur = s.project.assets[found.clip.assetId]?.duration ?? 30
+        const asset = s.project.assets[found.clip.assetId]
+        const assetDur = asset?.duration ?? 30
         const targetLen = Math.max(2, Math.min(30, assetDur / 2.5))
-        const segs = await findShortSegments(found.clip.assetId, targetLen, 3)
+        const segs = await findShortSegments(found.clip.assetId, targetLen, 5)
         if (!segs.length) throw new Error('Could not find distinct segments — clip may be too short')
-        const names = await createShortsProjects(s.project, found.clip, segs)
-        api.log(`Created ${names.length} Shorts projects: ${names.join(' · ')}`)
-        s.toast(`${names.length} Shorts created — open them from Projects`, 'ok')
+        const ranked = [...segs].sort((a, b) => b.score - a.score)
+        const thumbs = asset ? await captureSegmentThumbs(asset, ranked) : ranked.map(() => '')
+        setShorts({ clip: found.clip, segments: ranked, thumbs })
+        api.log(`${ranked.length} candidate moments found — pick your Shorts`)
       }),
     },
     {
@@ -238,6 +249,61 @@ export function AIPanel() {
           ))}
         </div>
       )}
+      {shorts && <ShortsTriage data={shorts} close={() => setShorts(null)} />}
     </>
+  )
+}
+
+/** Opus-style triage: ranked candidate cards; pick which become projects. */
+function ShortsTriage({ data, close }: { data: ShortsCandidates; close: () => void }) {
+  const toast = useEditor((s) => s.toast)
+  const [creating, setCreating] = useState(false)
+  const maxScore = Math.max(...data.segments.map((s) => s.score), 0.0001)
+
+  const create = async (segs: ShortSegment[]) => {
+    setCreating(true)
+    try {
+      const s = useEditor.getState()
+      const names = await createShortsProjects(s.project, data.clip, segs)
+      toast(`${names.length} Short project(s) created — open them from Projects`, 'ok')
+      close()
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={close}>
+      <div className="modal wide" onClick={(e) => e.stopPropagation()}>
+        <h2>Pick your Shorts</h2>
+        <p className="hint">
+          Ranked by hook energy (loudness + dynamics), edges snapped to natural
+          pauses. Each becomes its own 9:16 project.
+        </p>
+        <div className="shorts-grid">
+          {data.segments.map((seg, i) => (
+            <div key={i} className="shorts-card">
+              {data.thumbs[i] ? <img src={data.thumbs[i]} alt="" /> : <div className="ph">🎬</div>}
+              <div className="sc-meta">
+                <div className="sc-title">#{i + 1} · {formatTime(seg.start)}–{formatTime(seg.end)}</div>
+                <div className="sc-sub">{Math.round(seg.end - seg.start)}s</div>
+                <div className="sc-score" title="Relative energy score">
+                  <div style={{ width: `${Math.round((seg.score / maxScore) * 100)}%` }} />
+                </div>
+              </div>
+              <button className="small primary" disabled={creating} onClick={() => void create([seg])}>
+                Create
+              </button>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button onClick={close}>Close</button>
+          <button className="primary" disabled={creating} onClick={() => void create(data.segments)}>
+            Create all {data.segments.length}
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }

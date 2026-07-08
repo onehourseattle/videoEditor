@@ -85,8 +85,24 @@ export function ProjectsModal() {
   return (
     <div className="modal-backdrop" onClick={() => setProjectsOpen(false)}>
       <div className="modal wide" onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: 'flex', alignItems: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <h2 style={{ flex: 1 }}>Projects</h2>
+          <button
+            className="small"
+            title="Everything — project + media — in one portable .cutroompkg file"
+            onClick={async () => {
+              const s = useEditor.getState()
+              const { exportArchive } = await import('../state/archive')
+              toast('Packing project + media…', 'info')
+              const blob = await exportArchive(s.project)
+              const a = document.createElement('a')
+              a.href = URL.createObjectURL(blob)
+              a.download = `${s.project.name.replace(/[^\w.-]+/g, '_') || 'project'}.cutroompkg`
+              a.click()
+              URL.revokeObjectURL(a.href)
+              toast(`Archive saved (${(blob.size / 1e6).toFixed(1)} MB) — restores with Open file`, 'ok')
+            }}
+          >⤓ Archive current</button>
           <button className="primary" onClick={() => void newProject()}>+ New project</button>
         </div>
         {projects === null ? (

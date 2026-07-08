@@ -65,19 +65,20 @@ export function TopBar() {
       <input
         ref={fileRef}
         type="file"
-        accept=".json,application/json"
+        accept=".json,.cutroompkg,application/json"
         hidden
         onChange={async (e) => {
           const f = e.target.files?.[0]
           if (!f) return
           try {
-            const proj = await loadProjectFile(f)
+            const { isArchive, importArchive } = await import('../state/archive')
+            const proj = isArchive(f) ? await importArchive(f) : await loadProjectFile(f)
             const { assets, missing } = await assetStore.rehydrateAssets(proj.assets)
             replaceProject({ ...proj, assets })
             toast(
               missing.length
                 ? `Project loaded — re-import ${missing.length} media file(s) (same names) to re-link`
-                : 'Project loaded',
+                : isArchive(f) ? 'Package restored — project and media are back' : 'Project loaded',
               missing.length ? 'info' : 'ok',
             )
           } catch (err) {

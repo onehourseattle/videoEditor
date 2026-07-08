@@ -42,6 +42,40 @@ export async function findShortSegments(
     .filter((s) => s.end - s.start >= targetLen * 0.4)
 }
 
+/** Thumbnail per segment for the triage cards (seek-based, cached nowhere — cheap). */
+export async function captureSegmentThumbs(
+  asset: { id: string; url: string; duration: number },
+  segments: ShortSegment[],
+): Promise<string[]> {
+  if (!asset.url) return segments.map(() => '')
+  const video = document.createElement('video')
+  video.preload = 'auto'
+  video.muted = true
+  video.src = asset.url
+  await new Promise<void>((res) => {
+    video.addEventListener('loadeddata', () => res(), { once: true })
+    setTimeout(res, 3000)
+  })
+  const c = document.createElement('canvas')
+  const w = 200
+  const h = Math.max(2, Math.round((video.videoHeight / Math.max(1, video.videoWidth)) * w))
+  c.width = w
+  c.height = h
+  const ctx = c.getContext('2d')!
+  const thumbs: string[] = []
+  for (const seg of segments) {
+    video.currentTime = Math.min(asset.duration - 0.05, seg.start + (seg.end - seg.start) / 2)
+    await new Promise<void>((res) => {
+      video.addEventListener('seeked', () => res(), { once: true })
+      setTimeout(res, 600)
+    })
+    ctx.drawImage(video, 0, 0, w, h)
+    thumbs.push(c.toDataURL('image/jpeg', 0.6))
+  }
+  video.removeAttribute('src')
+  return thumbs
+}
+
 /** Materialize each segment as its own ready-to-edit project. */
 export async function createShortsProjects(
   source: Project,
