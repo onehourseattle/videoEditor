@@ -283,6 +283,8 @@ export interface Project {
   width: number
   height: number
   fps: number
+  /** bumped when the model changes; migrate.ts repairs older/foreign JSON */
+  schemaVersion?: number
   tracks: Track[]
   /** asset metadata; binary data lives in the AssetStore, not in project JSON */
   assets: Record<string, AssetMeta>

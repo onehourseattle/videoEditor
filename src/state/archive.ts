@@ -66,7 +66,8 @@ export async function importArchive(file: File): Promise<Project> {
     offset += entry.size
     await idb.put('blobs', entry.id, blob)
   }
-  return manifest.project
+  const { migrateProject } = await import('./migrate')
+  return migrateProject(manifest.project)
 }
 
 function guessMime(type?: string): string {

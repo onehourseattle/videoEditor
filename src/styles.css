@@ -527,6 +527,22 @@ button:active:not(:disabled) { transform: scale(0.97); }
   .timeline { padding-bottom: env(safe-area-inset-bottom); }
 }
 
+/* ── crash recovery ── */
+.crash-screen {
+  position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: var(--bg); z-index: 200; padding: 20px;
+}
+.crash-card {
+  max-width: 460px; background: var(--bg-panel); border: 1px solid var(--border);
+  border-radius: 14px; padding: 24px; display: flex; flex-direction: column; gap: 14px;
+}
+.crash-card h2 { font-size: 17px; }
+.crash-card p { color: var(--text-dim); font-size: 13px; line-height: 1.6; }
+.crash-card pre {
+  background: var(--console); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px; font-size: 11px; color: var(--danger); overflow: auto; max-height: 120px;
+}
+
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--bg-hover); }

@@ -105,6 +105,8 @@ function drawOverlay(ctx: CanvasRenderingContext2D, mode: 'guides' | 'platform',
 
 type OverlayMode = 'none' | 'guides' | 'platform'
 
+let renderErrorCount = 0
+
 export function Preview() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const playing = useEditor((s) => s.playing)
@@ -147,7 +149,16 @@ export function Preview() {
         canvas.height = bh
       }
       const ctx = canvas.getContext('2d')!
-      renderFrame(ctx, s.project, s.currentTime, previewFrames, bw / W)
+      try {
+        renderFrame(ctx, s.project, s.currentTime, previewFrames, bw / W)
+      } catch (err) {
+        // one bad frame must not kill the loop or the app — skip and report once
+        if (renderErrorCount++ === 0) {
+          console.error('preview render error', err)
+          s.toast('A clip failed to render — see console. Playback continues.', 'error')
+        }
+        return
+      }
 
       // platform overlay / safe zones (preview-only, never exported)
       if (overlayRef.current !== 'none') drawOverlay(ctx, overlayRef.current, bw, bh)

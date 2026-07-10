@@ -120,5 +120,18 @@ function of time, so what you see is exactly what encodes.
 ```bash
 npm run typecheck   # strict TS
 npm run build       # production bundle → dist/
+npm run test:unit   # engine math (keyframes, ripple, subtitles) via vitest
+npm run test:e2e    # 11 real-browser suites against the production build
 npm run gen-icons   # regenerate PWA/iOS icons (zero-dependency PNG writer)
 ```
+
+CI (GitHub Actions) runs typecheck, unit tests, the build, and the full
+browser suite on every push. Drop real-world footage into `tests/fixtures/`
+to extend the media-compatibility suite with your own files — each must
+import cleanly or fail with a readable error, never crash.
+
+Robustness guarantees: every project JSON entering the app (autosave,
+file, archive, template) passes through a sanitizing schema migration
+(`src/state/migrate.ts`), a React error boundary turns crashes into a
+recovery screen with a backup download, and a bad frame can never kill
+the preview loop.
