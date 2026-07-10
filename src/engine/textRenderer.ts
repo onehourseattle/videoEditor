@@ -30,6 +30,10 @@ function layoutLines(ctx: CanvasRenderingContext2D, words: string[], maxWidth: n
 function applyFont(ctx: CanvasRenderingContext2D, s: TextStyle) {
   ctx.font = `${s.fontWeight} ${s.fontSize}px ${s.fontFamily}`
   ctx.textBaseline = 'alphabetic'
+  // tracking: measureText honors this once set (Chrome 99+/Safari 17+)
+  if ('letterSpacing' in ctx) {
+    (ctx as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = `${s.letterSpacing || 0}px`
+  }
 }
 
 export function drawTextClip(ctx: CanvasRenderingContext2D, clip: TextClip, t: number, w: number, h: number) {
@@ -134,13 +138,30 @@ function drawStyledText(
   if (opts.animation === 'shake') {
     ctx.translate(Math.sin(opts.t * 50) * 4, Math.cos(opts.t * 47) * 3)
   }
+  // headline slant around the block center
+  if (s.skewDeg) {
+    ctx.translate(w / 2, h / 2)
+    ctx.transform(1, 0, -Math.tan((s.skewDeg * Math.PI) / 180), 1, 0, 0)
+    ctx.translate(-w / 2, -h / 2)
+  }
 
   const spaceW = ctx.measureText(' ').width
   let wordIdx = 0
+  let li = -1
   for (const line of lines) {
+    li++
     const lineWidth =
       line.words.reduce((acc, lw) => acc + ctx.measureText(lw.text).width, 0) + spaceW * (line.words.length - 1)
     let x = s.align === 'left' ? w * 0.07 : s.align === 'right' ? w * 0.93 - lineWidth : (w - lineWidth) / 2
+
+    // staggered line entrance (headlines)
+    ctx.save()
+    if (opts.animation === 'linesUp') {
+      const lp = ease('easeOut', Math.min(1, Math.max(0, opts.progress * (lines.length + 1) - li)))
+      ctx.translate(0, (1 - lp) * s.fontSize * 1.1)
+      ctx.globalAlpha *= lp
+    }
+    const lineHollow = !!s.hollow || (!!s.alternateLines && li % 2 === 1)
 
     // background box per line
     if (s.backgroundColor) {
@@ -186,35 +207,48 @@ function drawStyledText(
         ctx.fill()
       }
 
+      // poster echo: offset duplicate behind everything, no shadow
+      if (s.echo) {
+        ctx.save()
+        ctx.shadowBlur = 0
+        ctx.fillStyle = s.echo.color
+        ctx.fillText(lw.text, x + s.echo.x, y + s.echo.y)
+        ctx.restore()
+      }
       // shadow
       if (s.shadowBlur > 0) {
         ctx.shadowColor = s.shadowColor
         ctx.shadowBlur = s.shadowBlur
         ctx.shadowOffsetY = s.shadowBlur / 4
       }
-      // stroke
-      if (s.strokeWidth > 0) {
+      // stroke (hollow letters stroke in the text color when no explicit stroke is set)
+      const strokeW = lineHollow ? Math.max(s.strokeWidth, s.fontSize * 0.045) : s.strokeWidth
+      if (strokeW > 0) {
         ctx.lineJoin = 'round'
-        ctx.strokeStyle = s.strokeColor
-        ctx.lineWidth = s.strokeWidth
+        ctx.strokeStyle = lineHollow && s.strokeWidth === 0 ? s.color : s.strokeColor
+        ctx.lineWidth = strokeW
         ctx.strokeText(lw.text, x, y)
       }
-      // fill (gradient or flat, active word may recolor)
-      if (s.gradient) {
-        const g = ctx.createLinearGradient(0, y - s.fontSize, 0, y)
-        g.addColorStop(0, s.gradient[0])
-        g.addColorStop(1, s.gradient[1])
-        ctx.fillStyle = g
-      } else {
-        ctx.fillStyle = opts.animation === 'wordPop' && isActive ? s.highlightColor : s.color
+      // fill (gradient or flat; two-tone first word; active word may recolor)
+      if (!lineHollow) {
+        if (s.gradient) {
+          const g = ctx.createLinearGradient(0, y - s.fontSize, 0, y)
+          g.addColorStop(0, s.gradient[0])
+          g.addColorStop(1, s.gradient[1])
+          ctx.fillStyle = g
+        } else {
+          ctx.fillStyle = opts.animation === 'wordPop' && isActive ? s.highlightColor : s.color
+        }
+        if (s.firstWordColor && lw.wordIndex === 0) ctx.fillStyle = s.firstWordColor
+        if (opts.animation === 'wordHighlight' && isActive) ctx.fillStyle = '#ffffff'
+        ctx.fillText(lw.text, x, y)
       }
-      if (opts.animation === 'wordHighlight' && isActive) ctx.fillStyle = '#ffffff'
-      ctx.fillText(lw.text, x, y)
       ctx.restore()
 
       x += ww + spaceW
       wordIdx++
     }
+    ctx.restore() // per-line (linesUp) transform
     y += lineH
   }
   ctx.restore()
@@ -253,3 +287,103 @@ export const TEXT_PRESETS: { label: string; style: Partial<TextStyle>; animation
 export function makePresetStyle(partial: Partial<TextStyle>): TextStyle {
   return { ...defaultTextStyle(), ...partial }
 }
+
+// ─── Headline typography presets — display-grade titles ────────────────────
+
+export interface HeadlinePreset {
+  label: string
+  sample: string
+  style: Partial<TextStyle>
+  animation: TextClip['animation']
+  /** CSS approximation for the gallery card */
+  css: React.CSSProperties
+}
+
+// (react import only for the CSSProperties type above)
+import type React from 'react'
+
+export const HEADLINE_PRESETS: HeadlinePreset[] = [
+  {
+    label: 'Masthead',
+    sample: 'THE DROP',
+    style: {
+      fontFamily: 'Georgia, serif', fontWeight: 700, fontSize: 110, uppercase: true,
+      letterSpacing: 6, lineHeight: 1.05, shadowBlur: 18,
+    },
+    animation: 'linesUp',
+    css: { fontFamily: 'Georgia, serif', fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase' },
+  },
+  {
+    label: 'Poster echo',
+    sample: 'BIG NEWS',
+    style: {
+      fontFamily: 'Impact, "Arial Black", sans-serif', fontWeight: 900, fontSize: 118, uppercase: true,
+      color: '#ffffff', echo: { x: 10, y: 10, color: '#6C5CE7' }, shadowBlur: 0, letterSpacing: 2,
+    },
+    animation: 'popIn',
+    css: { fontFamily: 'Impact, sans-serif', fontWeight: 900, textTransform: 'uppercase', textShadow: '3px 3px 0 #6C5CE7' },
+  },
+  {
+    label: 'Hollow outline',
+    sample: 'MINIMAL',
+    style: {
+      fontFamily: '"Avenir Next", Futura, sans-serif', fontWeight: 800, fontSize: 112, uppercase: true,
+      hollow: true, letterSpacing: 8, shadowBlur: 0,
+    },
+    animation: 'fadeIn',
+    css: { fontWeight: 800, textTransform: 'uppercase', letterSpacing: 2, WebkitTextStroke: '1.3px currentColor', color: 'transparent' },
+  },
+  {
+    label: 'Two-tone split',
+    sample: 'REAL results',
+    style: {
+      fontWeight: 900, fontSize: 100, firstWordColor: '#6C5CE7', shadowBlur: 10, lineHeight: 1.08,
+    },
+    animation: 'linesUp',
+    css: { fontWeight: 900 },
+  },
+  {
+    label: 'Slant impact',
+    sample: 'FASTER',
+    style: {
+      fontFamily: 'Impact, "Arial Black", sans-serif', fontWeight: 900, fontSize: 116, uppercase: true,
+      skewDeg: 12, strokeWidth: 8, strokeColor: '#000000', letterSpacing: 2,
+    },
+    animation: 'slideUp',
+    css: { fontFamily: 'Impact, sans-serif', fontWeight: 900, textTransform: 'uppercase', fontStyle: 'italic' },
+  },
+  {
+    label: 'Stacked alt',
+    sample: 'NEW RULES',
+    style: {
+      fontFamily: 'Futura, "Avenir Next", sans-serif', fontWeight: 800, fontSize: 104, uppercase: true,
+      alternateLines: true, letterSpacing: 4, lineHeight: 1.06, shadowBlur: 0,
+    },
+    animation: 'linesUp',
+    css: { fontWeight: 800, textTransform: 'uppercase', letterSpacing: 1 },
+  },
+  {
+    label: 'Typewriter serif',
+    sample: 'chapter one',
+    style: {
+      fontFamily: '"American Typewriter", Georgia, serif', fontWeight: 600, fontSize: 88,
+      letterSpacing: 3, backgroundColor: 'rgba(0,0,0,0.55)', backgroundPadding: 26, cornerRadius: 4,
+    },
+    animation: 'typewriter',
+    css: { fontFamily: 'Georgia, serif', fontWeight: 600, letterSpacing: 1 },
+  },
+  {
+    label: 'Gradient slab',
+    sample: 'LEVEL UP',
+    style: {
+      fontFamily: '"Arial Black", Impact, sans-serif', fontWeight: 900, fontSize: 112, uppercase: true,
+      gradient: ['#ffd76b', '#ff5c7a'] as [string, string], strokeWidth: 6, strokeColor: '#2a0f24',
+      letterSpacing: 2, skewDeg: 4,
+    },
+    animation: 'popIn',
+    css: {
+      fontWeight: 900, textTransform: 'uppercase',
+      background: 'linear-gradient(180deg,#ffd76b,#ff5c7a)', WebkitBackgroundClip: 'text', color: 'transparent',
+    },
+  },
+]

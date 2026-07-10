@@ -244,6 +244,18 @@ label.field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; 
 .dropzone:hover, .dropzone.over { border-color: var(--accent); color: var(--text); background: var(--accent-soft); }
 
 .preset-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+/* headline typography gallery */
+.headline-list { display: flex; flex-direction: column; gap: 8px; }
+.headline-card {
+  background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 12px 12px 8px; cursor: pointer; overflow: hidden;
+  display: flex; flex-direction: column; gap: 4px;
+  transition: border-color 0.12s, background 0.12s;
+}
+.headline-card:hover { border-color: var(--accent); background: var(--bg-hover); }
+.hl-sample { font-size: 22px; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hl-label { font-size: 10px; color: var(--text-faint); }
 .preset-card {
   background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 12px 8px; text-align: center; cursor: pointer; font-weight: 700;

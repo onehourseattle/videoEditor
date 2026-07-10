@@ -129,6 +129,7 @@ export type TextAnimation =
   | 'bounceIn'
   | 'waveIn'
   | 'shake'
+  | 'linesUp' // headline: each line rises in, staggered
 
 export interface TextStyle {
   fontFamily: string
@@ -148,6 +149,17 @@ export interface TextStyle {
   uppercase: boolean
   gradient?: [string, string] // vertical gradient fill overrides color
   highlightColor: string // for wordHighlight animation
+  // ── headline typography (all optional / backward compatible) ──
+  /** italic-style slant in degrees (positive = forward lean) */
+  skewDeg?: number
+  /** stroke-only letters, no fill (outline/hollow look) */
+  hollow?: boolean
+  /** offset duplicate drawn behind the text — retro poster echo */
+  echo?: { x: number; y: number; color: string }
+  /** two-tone: the first word takes this fill */
+  firstWordColor?: string
+  /** stacked headline: every other line renders hollow */
+  alternateLines?: boolean
 }
 
 export interface TextClip extends ClipBase {

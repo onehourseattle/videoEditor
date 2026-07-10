@@ -220,7 +220,7 @@ function TextControls({ clip, edit }: { clip: Extract<Clip, { kind: 'text' }>; e
       <label className="field">Animation
         <select value={clip.animation}
           onChange={(e) => edit((c) => (c.kind === 'text' ? { ...c, animation: e.target.value as typeof clip.animation } : c))}>
-          {['none', 'fadeIn', 'popIn', 'slideUp', 'typewriter', 'wordPop', 'wordHighlight', 'bounceIn', 'waveIn', 'shake'].map((a) => (
+          {['none', 'fadeIn', 'popIn', 'slideUp', 'linesUp', 'typewriter', 'wordPop', 'wordHighlight', 'bounceIn', 'waveIn', 'shake'].map((a) => (
             <option key={a}>{a}</option>
           ))}
         </select>
@@ -293,6 +293,34 @@ function StyleControls({ style, onChange }: { style: TextStyle; onChange: (s: Te
         </label>
       </div>
       <div className="row">
+        <label className="field">Tracking
+          <input type="number" step={1} min={-10} max={40} value={style.letterSpacing}
+            onChange={(e) => onChange({ ...style, letterSpacing: Number(e.target.value) || 0 })} />
+        </label>
+        <label className="field">Leading
+          <input type="number" step={0.05} min={0.7} max={2.5} value={style.lineHeight}
+            onChange={(e) => onChange({ ...style, lineHeight: Math.max(0.7, Number(e.target.value) || 1.2) })} />
+        </label>
+        <label className="field">Slant°
+          <input type="number" step={1} min={-25} max={25} value={style.skewDeg ?? 0}
+            onChange={(e) => onChange({ ...style, skewDeg: Number(e.target.value) || 0 })} />
+        </label>
+      </div>
+      <div className="row">
+        <label className="field">Align
+          <select value={style.align} onChange={(e) => onChange({ ...style, align: e.target.value as TextStyle['align'] })}>
+            <option value="left">Left</option>
+            <option value="center">Center</option>
+            <option value="right">Right</option>
+          </select>
+        </label>
+        <label className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-end' }}>
+          <input type="checkbox" checked={!!style.hollow}
+            onChange={(e) => onChange({ ...style, hollow: e.target.checked })} />
+          Hollow
+        </label>
+      </div>
+      <div className="row">
         <label className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
           <input type="checkbox" checked={style.uppercase} onChange={(e) => onChange({ ...style, uppercase: e.target.checked })} />
           UPPERCASE
@@ -301,6 +329,11 @@ function StyleControls({ style, onChange }: { style: TextStyle; onChange: (s: Te
           <input type="checkbox" checked={!!style.backgroundColor}
             onChange={(e) => onChange({ ...style, backgroundColor: e.target.checked ? 'rgba(0,0,0,0.75)' : '' })} />
           Box
+        </label>
+        <label className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <input type="checkbox" checked={!!style.echo}
+            onChange={(e) => onChange({ ...style, echo: e.target.checked ? { x: 10, y: 10, color: '#6C5CE7' } : undefined })} />
+          Echo
         </label>
       </div>
     </>
