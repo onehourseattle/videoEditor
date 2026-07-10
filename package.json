@@ -20,6 +20,7 @@
     "@capacitor/core": "^8.4.1",
     "@capacitor/ios": "^8.4.1",
     "@huggingface/transformers": "^3.3.1",
+    "@mediapipe/tasks-vision": "^0.10.35",
     "mediabunny": "^1.50.6",
     "mp4-muxer": "^5.1.5",
     "react": "^18.3.1",

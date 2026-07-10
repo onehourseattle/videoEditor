@@ -5,6 +5,7 @@ import { drawTransition } from './transitions'
 import { drawCaptionClip, drawTextClip } from './textRenderer'
 import { drawChartClip } from './chartRenderer'
 import { ease } from './keyframes'
+import { ensureSegmenter, getPersonMatte } from '../ai/segmentation'
 
 /**
  * Renders the project at time `t` onto a canvas. Pure with respect to time —
@@ -59,32 +60,118 @@ export function renderFrame(
   ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height)
   ctx.setTransform(scale, 0, 0, scale, ox, oy)
 
+  // "Text behind person": when a behind-placed text clip is active, render in
+  // phases — base footage, behind-text, person cutout of the footage, then
+  // the remaining overlays. Otherwise use the normal single pass.
+  const behindActive = project.tracks.some((tr) =>
+    !tr.hidden && tr.clips.some(
+      (c) => c.kind === 'text' && c.placement === 'behind' && t >= c.start && t < c.start + c.duration,
+    ),
+  )
+
+  const counter = { i: 0 }
+  if (!behindActive) {
+    renderTracksPass(ctx, project, t, frames, scale, counter, () => true)
+  } else {
+    ensureSegmenter()
+    const isBase = (c: Clip) => c.kind === 'video' || c.kind === 'image'
+    const isBehindText = (c: Clip) => c.kind === 'text' && c.placement === 'behind'
+    renderTracksPass(ctx, project, t, frames, scale, counter, isBase)
+    renderTracksPass(ctx, project, t, frames, scale, counter, isBehindText)
+    drawPersonMatte(ctx, project, t, frames, scale, counter)
+    renderTracksPass(ctx, project, t, frames, scale, counter, (c) => !isBase(c) && !isBehindText(c))
+  }
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+}
+
+function renderTracksPass(
+  ctx: CanvasRenderingContext2D,
+  project: Project,
+  t: number,
+  frames: FrameProvider,
+  scale: number,
+  counter: { i: number },
+  include: (c: Clip) => boolean,
+) {
+  const { width: W, height: H } = project
   // Bottom-up: tracks array is top-first, so iterate in reverse. Audio never draws.
   // ALL clips active at t on a track render, stacked in start order (later on
   // top) — overlapping overlays coexist rather than eclipsing each other.
-  let scratchIdx = 0
   for (let ti = project.tracks.length - 1; ti >= 0; ti--) {
     const track = project.tracks[ti]
     if (track.kind === 'audio' || track.hidden) continue
 
-    const actives = track.clips.filter((c) => t >= c.start && t < c.start + c.duration)
+    const actives = track.clips.filter((c) => t >= c.start && t < c.start + c.duration && include(c))
     const trans = findTransition(track, t)
+    const useTrans = trans && include(trans.incoming) && include(trans.outgoing)
 
-    if (trans) {
+    if (trans && useTrans) {
       // outgoing clip frozen at its final frame as the base layer
-      const outLayer = renderClipLayer(project, trans.outgoing, trans.outgoing.start + trans.outgoing.duration - 0.001, frames, getScratch(sw(W, scale), sw(H, scale), scratchIdx++), t, scale)
+      const outLayer = renderClipLayer(project, trans.outgoing, trans.outgoing.start + trans.outgoing.duration - 0.001, frames, getScratch(sw(W, scale), sw(H, scale), counter.i++), t, scale)
       if (outLayer) ctx.drawImage(outLayer, 0, 0, W, H)
-      const inLayer = renderClipLayer(project, trans.incoming, t, frames, getScratch(sw(W, scale), sw(H, scale), scratchIdx++), t, scale)
+      const inLayer = renderClipLayer(project, trans.incoming, t, frames, getScratch(sw(W, scale), sw(H, scale), counter.i++), t, scale)
       if (inLayer) drawTransition(ctx, inLayer, trans.transition.type, trans.transP, W, H)
     }
 
     for (const clip of actives) {
-      if (trans && clip.id === trans.incoming.id) continue // already drawn via the transition
-      const layer = renderClipLayer(project, clip, t, frames, getScratch(sw(W, scale), sw(H, scale), scratchIdx++), t, scale)
+      if (trans && useTrans && clip.id === trans.incoming.id) continue // already drawn via the transition
+      const layer = renderClipLayer(project, clip, t, frames, getScratch(sw(W, scale), sw(H, scale), counter.i++), t, scale)
       if (layer) ctx.drawImage(layer, 0, 0, W, H)
     }
   }
-  ctx.setTransform(1, 0, 0, 1, 0, 0)
+}
+
+/** Re-draw the person from the topmost active video clip over the behind-text. */
+function drawPersonMatte(
+  ctx: CanvasRenderingContext2D,
+  project: Project,
+  t: number,
+  frames: FrameProvider,
+  scale: number,
+  counter: { i: number },
+) {
+  const { width: W, height: H } = project
+  // topmost active video clip (tracks are top-first)
+  let vc: VideoClip | null = null
+  for (const track of project.tracks) {
+    if (track.hidden) continue
+    for (let i = track.clips.length - 1; i >= 0; i--) {
+      const c = track.clips[i]
+      if (c.kind === 'video' && t >= c.start && t < c.start + c.duration) { vc = c; break }
+    }
+    if (vc) break
+  }
+  if (!vc) return
+  const frame = frames.getVideoFrame(vc, clipSourceTime(vc, t))
+  if (!frame) return
+  const fw = (frame as HTMLVideoElement).videoWidth ?? (frame as HTMLCanvasElement).width
+  const fh = (frame as HTMLVideoElement).videoHeight ?? (frame as HTMLCanvasElement).height
+  const matte = getPersonMatte(frame, fw, fh)
+  if (!matte) return
+
+  // mirror the video clip's transform + filters so the cutout sits exactly on itself
+  const local = t - vc.start
+  const layer = getScratch(sw(W, scale), sw(H, scale), counter.i++)
+  const lctx = layer.getContext('2d')!
+  lctx.setTransform(1, 0, 0, 1, 0, 0)
+  lctx.clearRect(0, 0, layer.width, layer.height)
+  lctx.setTransform(scale, 0, 0, scale, 0, 0)
+  const x = sampleKeyframes(vc.transform.x, local)
+  const y = sampleKeyframes(vc.transform.y, local)
+  const scl = sampleKeyframes(vc.transform.scale, local)
+  const rotation = sampleKeyframes(vc.transform.rotation, local)
+  const opacity = sampleKeyframes(vc.transform.opacity, local)
+  if (opacity <= 0 || scl === 0) return
+  lctx.save()
+  lctx.globalAlpha = opacity
+  lctx.translate(W / 2 + x, H / 2 + y)
+  lctx.rotate((rotation * Math.PI) / 180)
+  lctx.scale(scl, scl)
+  lctx.translate(-W / 2, -H / 2)
+  lctx.filter = filterString(vc.effects)
+  drawCover(lctx, matte, W, H)
+  lctx.restore()
+  ctx.drawImage(layer, 0, 0, W, H)
 }
 
 function sw(v: number, scale: number): number {

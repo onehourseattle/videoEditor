@@ -110,6 +110,10 @@ function drawStyledText(
   opts: DrawOpts,
 ) {
   ctx.save()
+  // cinematic tracking: letters glide from wide spacing into place
+  if (opts.animation === 'trackIn') {
+    s = { ...s, letterSpacing: (s.letterSpacing || 0) + (1 - ease('easeOut', opts.progress)) * s.fontSize * 0.45 }
+  }
   applyFont(ctx, s)
   const maxWidth = w * 0.86
   const lines = layoutLines(ctx, words, maxWidth)
@@ -120,7 +124,13 @@ function drawStyledText(
 
   // clip-level entrance transforms
   const p = ease('easeOut', opts.progress)
-  if (opts.animation === 'fadeIn') ctx.globalAlpha *= p
+  if (opts.animation === 'fadeIn' || opts.animation === 'trackIn') ctx.globalAlpha *= p
+  if (opts.animation === 'flicker' && opts.progress < 1) {
+    // deterministic neon power-on: irregular on/off bursts, then steady
+    const f = opts.progress
+    const on = f > 0.85 || Math.sin(f * 61) * Math.cos(f * 23) > -0.25
+    ctx.globalAlpha *= on ? 0.55 + 0.45 * f : 0.06
+  }
   if (opts.animation === 'popIn') {
     ctx.translate(w / 2, h / 2)
     const sc = 0.5 + 0.5 * ease('spring', opts.progress)
@@ -160,6 +170,14 @@ function drawStyledText(
       const lp = ease('easeOut', Math.min(1, Math.max(0, opts.progress * (lines.length + 1) - li)))
       ctx.translate(0, (1 - lp) * s.fontSize * 1.1)
       ctx.globalAlpha *= lp
+    }
+    if (opts.animation === 'reveal') {
+      // line rises out of an invisible mask along its own baseline box
+      const lp = ease('easeOut', Math.min(1, Math.max(0, opts.progress * (lines.length + 0.5) - li * 0.7)))
+      ctx.beginPath()
+      ctx.rect(0, y - s.fontSize * 1.05, w, lineH * 1.15)
+      ctx.clip()
+      ctx.translate(0, (1 - lp) * lineH)
     }
     const lineHollow = !!s.hollow || (!!s.alternateLines && li % 2 === 1)
 
@@ -310,7 +328,7 @@ export const HEADLINE_PRESETS: HeadlinePreset[] = [
       fontFamily: 'Georgia, serif', fontWeight: 700, fontSize: 110, uppercase: true,
       letterSpacing: 6, lineHeight: 1.05, shadowBlur: 18,
     },
-    animation: 'linesUp',
+    animation: 'trackIn',
     css: { fontFamily: 'Georgia, serif', fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase' },
   },
   {
@@ -330,8 +348,18 @@ export const HEADLINE_PRESETS: HeadlinePreset[] = [
       fontFamily: '"Avenir Next", Futura, sans-serif', fontWeight: 800, fontSize: 112, uppercase: true,
       hollow: true, letterSpacing: 8, shadowBlur: 0,
     },
-    animation: 'fadeIn',
+    animation: 'reveal',
     css: { fontWeight: 800, textTransform: 'uppercase', letterSpacing: 2, WebkitTextStroke: '1.3px currentColor', color: 'transparent' },
+  },
+  {
+    label: 'Neon flicker',
+    sample: 'OPEN LATE',
+    style: {
+      fontFamily: 'Futura, "Avenir Next", sans-serif', fontWeight: 700, fontSize: 100, uppercase: true,
+      color: '#7efcf6', shadowColor: '#0affef', shadowBlur: 30, letterSpacing: 6,
+    },
+    animation: 'flicker',
+    css: { fontWeight: 700, textTransform: 'uppercase', letterSpacing: 2, color: '#3fd9d1', textShadow: '0 0 8px #0affef' },
   },
   {
     label: 'Two-tone split',

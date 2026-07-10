@@ -2,6 +2,8 @@ import { useRef } from 'react'
 import type { Clip, Effect, TextStyle } from '../types/model'
 import { useEditor, findClip, replaceClip } from '../state/store'
 import { useFonts } from '../state/fonts'
+import { HEADLINE_PRESETS } from '../engine/textRenderer'
+import { defaultTextStyle } from '../types/model'
 import { EFFECT_PRESETS } from '../engine/effects'
 import { TRANSITION_TYPES } from '../engine/transitions'
 import { setKeyframe, sampleKeyframes } from '../engine/keyframes'
@@ -217,10 +219,41 @@ function TextControls({ clip, edit }: { clip: Extract<Clip, { kind: 'text' }>; e
         <textarea rows={2} value={clip.text}
           onChange={(e) => edit((c) => (c.kind === 'text' ? { ...c, text: e.target.value, name: e.target.value.slice(0, 20) } : c))} />
       </label>
+      <label className="field">Headline style — switch anytime, your words stay
+        <select
+          value=""
+          onChange={(e) => {
+            const preset = HEADLINE_PRESETS[Number(e.target.value)]
+            if (!preset) return
+            edit((c) => (c.kind === 'text'
+              ? { ...c, style: { ...defaultTextStyle(), ...preset.style }, animation: preset.animation }
+              : c))
+          }}>
+          <option value="">Apply a headline look…</option>
+          {HEADLINE_PRESETS.map((p, i) => <option key={p.label} value={i}>{p.label}</option>)}
+        </select>
+      </label>
+      <div className="row">
+        <label className="field" style={{ flex: 1 }}>Placement
+          <select
+            value={clip.placement ?? 'front'}
+            onChange={(e) => edit((c) => (c.kind === 'text' ? { ...c, placement: e.target.value as 'front' | 'behind' } : c))}>
+            <option value="front">In front of everything</option>
+            <option value="behind">Behind the person</option>
+          </select>
+        </label>
+      </div>
+      {clip.placement === 'behind' && (
+        <p className="hint" style={{ margin: 0 }}>
+          The person from your footage is re-drawn over this text using on-device
+          segmentation. One-time setup: <code>npm run fetch-models -- --segmentation</code>.
+          Until the model is present, the text renders normally.
+        </p>
+      )}
       <label className="field">Animation
         <select value={clip.animation}
           onChange={(e) => edit((c) => (c.kind === 'text' ? { ...c, animation: e.target.value as typeof clip.animation } : c))}>
-          {['none', 'fadeIn', 'popIn', 'slideUp', 'linesUp', 'typewriter', 'wordPop', 'wordHighlight', 'bounceIn', 'waveIn', 'shake'].map((a) => (
+          {['none', 'fadeIn', 'popIn', 'slideUp', 'linesUp', 'trackIn', 'reveal', 'flicker', 'typewriter', 'wordPop', 'wordHighlight', 'bounceIn', 'waveIn', 'shake'].map((a) => (
             <option key={a}>{a}</option>
           ))}
         </select>

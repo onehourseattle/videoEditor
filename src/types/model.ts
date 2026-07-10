@@ -130,6 +130,9 @@ export type TextAnimation =
   | 'waveIn'
   | 'shake'
   | 'linesUp' // headline: each line rises in, staggered
+  | 'trackIn' // headline: letter-spacing tightens from wide (cinematic)
+  | 'reveal' // headline: lines rise out of a mask
+  | 'flicker' // headline: neon power-on flicker
 
 export interface TextStyle {
   fontFamily: string
@@ -168,6 +171,8 @@ export interface TextClip extends ClipBase {
   style: TextStyle
   animation: TextAnimation
   animationDuration: number
+  /** 'behind' = the person from the footage is re-drawn OVER this text (local segmentation) */
+  placement?: 'front' | 'behind'
 }
 
 export interface CaptionWord {
