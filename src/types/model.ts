@@ -96,6 +96,12 @@ export interface VideoClip extends ClipBase {
   muted: boolean
   /** optional volume envelope (multiplies `volume`); times relative to clip start */
   gain?: Keyframe[]
+  /**
+   * Speed ramp: absolute speed multipliers over the clip, with keyframe `t`
+   * NORMALIZED to 0..1 across the clip. Normalizing means trimming a clip
+   * never invalidates its ramp. When present this supersedes `speed`.
+   */
+  speedCurve?: Keyframe[]
 }
 
 export interface ImageClip extends ClipBase {
@@ -114,6 +120,12 @@ export interface AudioClip extends ClipBase {
   fadeOut: number
   /** optional volume envelope (multiplies `volume`); times relative to clip start */
   gain?: Keyframe[]
+  /**
+   * Speed ramp: absolute speed multipliers over the clip, with keyframe `t`
+   * NORMALIZED to 0..1 across the clip. Normalizing means trimming a clip
+   * never invalidates its ramp. When present this supersedes `speed`.
+   */
+  speedCurve?: Keyframe[]
 }
 
 // ─── Text & captions ─────────────────────────────────────────────────────────

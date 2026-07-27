@@ -1,6 +1,7 @@
 import type { AudioClip, Project, VideoClip } from '../types/model'
 import { assetStore } from '../state/assetStore'
 import { sampleKeyframes } from './keyframes'
+import { hasRamp, sourceTimeAt, speedSamples } from './speed'
 
 type AudibleClip = (VideoClip | AudioClip) & { trackMuted: boolean }
 
@@ -76,11 +77,20 @@ export async function scheduleAudio(
 
     // where inside the source we need to start
     const skipIntoClip = Math.max(0, from - clip.start) // timeline seconds already elapsed
-    const sourceOffset = clip.offset + skipIntoClip * clip.speed
-    const remaining = (clip.duration - skipIntoClip) * clip.speed // source-domain seconds
+    const playSpan = clip.duration - skipIntoClip // timeline seconds still to play
+    const sourceOffset = sourceTimeAt(clip, skipIntoClip)
+    // source-domain seconds consumed: an integral once a ramp is involved
+    const remaining = hasRamp(clip)
+      ? sourceTimeAt(clip, clip.duration) - sourceOffset
+      : playSpan * clip.speed
     if (remaining <= 0 || sourceOffset >= buffer.duration) continue
 
     const startAt = when + Math.max(0, clip.start - from)
+    // a ramp automates playbackRate so pitch and timing track the curve
+    if (hasRamp(clip) && playSpan > 0.05) {
+      const samples = speedSamples(clip, skipIntoClip, clip.duration, 128)
+      src.playbackRate.setValueCurveAtTime(samples, startAt, playSpan)
+    }
     src.start(startAt, sourceOffset, Math.min(remaining, buffer.duration - sourceOffset))
     sources.push(src)
   }

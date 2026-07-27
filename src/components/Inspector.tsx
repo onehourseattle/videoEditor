@@ -2,6 +2,7 @@ import { useRef } from 'react'
 import type { Clip, Effect, TextStyle } from '../types/model'
 import { useEditor, findClip, replaceClip } from '../state/store'
 import { useFonts } from '../state/fonts'
+import { hasRamp, averageSpeed, sourceSpanOf, applyRamp, clearRamp, speedAt, RAMP_PRESETS } from '../engine/speed'
 import { HEADLINE_PRESETS } from '../engine/textRenderer'
 import { defaultTextStyle } from '../types/model'
 import { EFFECT_PRESETS } from '../engine/effects'
@@ -51,12 +52,17 @@ export function Inspector() {
         <>
           <div className="row">
             <label className="field">Speed
-              <input type="number" step={0.1} min={0.1} max={4} value={clip.speed}
+              <input type="number" step={0.1} min={0.1} max={4}
+                value={hasRamp(clip) ? Number(averageSpeed(clip).toFixed(2)) : clip.speed}
+                title={hasRamp(clip) ? 'Average of the ramp — editing replaces the ramp' : 'Playback speed'}
                 onChange={(e) => {
                   const speed = Math.min(4, Math.max(0.1, num(e.target.value) || 1))
-                  edit((c) => (c.kind === 'video' || c.kind === 'audio')
-                    ? { ...c, speed, duration: (c.duration * c.speed) / speed }
-                    : c)
+                  edit((c) => {
+                    if (c.kind !== 'video' && c.kind !== 'audio') return c
+                    // a constant speed replaces any ramp, keeping the source range
+                    const span = sourceSpanOf(c)
+                    return { ...clearRamp(c), speed, duration: Math.max(0.05, span / speed) }
+                  })
                 }} />
             </label>
             <label className="field">Volume
@@ -69,6 +75,7 @@ export function Inspector() {
               onChange={(e) => edit((c) => ('muted' in c ? { ...c, muted: e.target.checked } : c))} />
             Muted
           </label>
+          <SpeedRamp clip={clip} edit={edit} />
           {clip.gain && clip.gain.length > 1 && (
             <div className="row" style={{ fontSize: 12, color: 'var(--text-dim)' }}>
               🎚 Volume envelope: {clip.gain.length} points
@@ -422,4 +429,53 @@ function toHex(c: string): string {
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100
+}
+
+
+/**
+ * Speed ramp control: preset chips plus a sparkline of the curve, so the
+ * shape of the ramp is visible without opening a graph editor.
+ */
+function SpeedRamp({ clip, edit }: {
+  clip: Extract<Clip, { kind: 'video' | 'audio' }>
+  edit: (fn: (c: Clip) => Clip) => void
+}) {
+  const ramped = hasRamp(clip)
+  const points: string = ramped
+    ? Array.from({ length: 41 }, (_, i) => {
+        const u = i / 40
+        const v = speedAt(clip, u * clip.duration)
+        const max = 4
+        return `${(u * 100).toFixed(1)},${(28 - Math.min(1, v / max) * 26).toFixed(1)}`
+      }).join(' ')
+    : ''
+
+  return (
+    <>
+      <h4>Speed ramp</h4>
+      {ramped && (
+        <div className="ramp-preview">
+          <svg viewBox="0 0 100 28" preserveAspectRatio="none">
+            <polyline points={points} />
+          </svg>
+        </div>
+      )}
+      <div className="ramp-grid">
+        {RAMP_PRESETS.map((r) => (
+          <button
+            key={r.name}
+            className="small"
+            title={r.sub}
+            onClick={() => edit((c) => (c.kind === 'video' || c.kind === 'audio' ? applyRamp(c, r.curve) : c))}
+          >{r.name}</button>
+        ))}
+        {ramped && (
+          <button
+            className="small ghost"
+            onClick={() => edit((c) => (c.kind === 'video' || c.kind === 'audio' ? clearRamp(c) : c))}
+          >Clear ramp</button>
+        )}
+      </div>
+    </>
+  )
 }

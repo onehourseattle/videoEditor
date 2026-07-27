@@ -7,6 +7,7 @@ import { drawCaptionClip, drawTextClip } from './textRenderer'
 import { drawChartClip } from './chartRenderer'
 import { ease } from './keyframes'
 import { ensureSegmenter, getPersonMatte } from '../ai/segmentation'
+import { sourceTimeAt } from './speed'
 
 /**
  * Renders the project at time `t` onto a canvas. Pure with respect to time —
@@ -56,7 +57,8 @@ function getScratch(w: number, h: number, i: number): AnyCanvas {
 }
 
 export function clipSourceTime(clip: VideoClip, timelineTime: number): number {
-  return clip.offset + (timelineTime - clip.start) * clip.speed
+  // speed ramps make this an integral, not a multiplication
+  return sourceTimeAt(clip, timelineTime - clip.start)
 }
 
 export function renderFrame(

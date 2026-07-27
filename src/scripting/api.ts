@@ -7,6 +7,8 @@ import {
   addClipToTrack, addTrack, byStart, findClip, removeClips, replaceClip, rippleDeleteRange, splitClipAt, useEditor,
 } from '../state/store'
 import { setKeyframe } from '../engine/keyframes'
+import { playback } from '../engine/playback'
+import { applyRamp, clearRamp, sourceSpanOf, RAMP_PRESETS } from '../engine/speed'
 import { defaultChartSpec } from '../engine/chartRenderer'
 import { detectSilences, DEFAULT_SILENCE_OPTIONS } from '../ai/silence'
 import { detectBeats, estimateBpm } from '../ai/beats'
@@ -54,7 +56,9 @@ export function createScriptApi(log: (msg: string) => void) {
       return get().currentTime
     },
     seek(t: number) {
-      get().setTime(t)
+      // go through playback so pooled <video> elements re-seek too — otherwise
+      // a scripted seek moves the playhead but leaves a stale frame on screen
+      playback.seek(t)
     },
 
     // ── structure ──
@@ -161,8 +165,31 @@ export function createScriptApi(log: (msg: string) => void) {
       mutate((p) =>
         replaceClip(p, clipId, (c) => {
           if (c.kind !== 'video' && c.kind !== 'audio') return c
-          const ratio = c.speed / speed
-          return { ...c, speed, duration: c.duration * ratio }
+          // a constant speed replaces any ramp; keep the same source range
+          const sourceSpan = sourceSpanOf(c)
+          const next = clearRamp(c)
+          return { ...next, speed, duration: Math.max(0.05, sourceSpan / speed) }
+        }),
+      )
+    },
+    /** Apply a speed ramp preset (see RAMP_PRESETS) or a raw normalized curve. */
+    setSpeedRamp(clipId: string, curveOrPreset: string | { t: number; value: number; easing?: string }[]) {
+      mutate((p) =>
+        replaceClip(p, clipId, (c) => {
+          if (c.kind !== 'video' && c.kind !== 'audio') return c
+          if (curveOrPreset === 'none') return clearRamp(c)
+          const preset = typeof curveOrPreset === 'string'
+            ? RAMP_PRESETS.find((r) => r.name.toLowerCase() === curveOrPreset.toLowerCase())
+            : null
+          if (typeof curveOrPreset === 'string' && !preset) {
+            throw new Error(`Unknown ramp "${curveOrPreset}" — try: ${RAMP_PRESETS.map((r) => r.name).join(', ')}`)
+          }
+          const curve = preset
+            ? preset.curve
+            : (curveOrPreset as { t: number; value: number; easing?: string }[]).map((k) => ({
+                t: k.t, value: k.value, easing: (k.easing ?? 'easeInOut') as never,
+              }))
+          return applyRamp(c, curve)
         }),
       )
     },

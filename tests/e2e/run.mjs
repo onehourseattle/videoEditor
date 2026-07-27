@@ -51,6 +51,7 @@ const SUITES = [
   'audio-ai-test.mjs',
   'gl-test.mjs',
   'worker-export-test.mjs',
+  'speed-ramp-test.mjs',
   // headline2 needs the segmentation model — skipped unless fetched
   ...(existsSync(path.join(root, 'dist', 'models', 'mediapipe', 'selfie_segmenter.tflite')) ? ['headline2-test.mjs'] : []),
 ]

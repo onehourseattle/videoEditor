@@ -1,7 +1,8 @@
 import { create } from 'zustand'
-import type { Clip, Project, Track, TrackKind } from '../types/model'
+import type { AudioClip, Clip, Project, Track, TrackKind, VideoClip } from '../types/model'
 import { projectDuration } from '../types/model'
 import { uid } from '../utils/id'
+import { sourceTimeAt, sliceRamp } from '../engine/speed'
 import { clamp } from '../utils/time'
 
 const HISTORY_LIMIT = 100
@@ -217,7 +218,17 @@ export function splitClipAt(p: Project, clipId: string, t: number): Project {
   const right: Clip = { ...clip, id: uid('clip'), start: t, duration: clip.duration - local }
 
   if (right.kind === 'video' || right.kind === 'audio') {
-    right.offset = right.offset + local * right.speed
+    // ramps make the split point an integral of the speed curve
+    const src = clip as VideoClip | AudioClip // same kind as `right`
+    right.offset = sourceTimeAt(src, local)
+    const curve = src.speedCurve
+    if (curve && curve.length > 1 && src.duration > 0) {
+      const cut = local / src.duration
+      right.speedCurve = sliceRamp(curve, cut, 1)
+      if (left.kind === 'video' || left.kind === 'audio') {
+        left.speedCurve = sliceRamp(curve, 0, cut)
+      }
+    }
     if (right.gain) {
       right.gain = right.gain.filter((k) => k.t >= local).map((k) => ({ ...k, t: k.t - local }))
       if (right.gain.length < 2) right.gain = undefined
@@ -265,9 +276,15 @@ export function rippleDeleteRange(p: Project, trackId: string, from: number, to:
             const keep = from - c.start
             const left: Clip = { ...c, duration: keep, transition: undefined }
             if (left.kind === 'caption') left.words = left.words.filter((w) => w.start < keep)
-            if ((left.kind === 'video' || left.kind === 'audio') && left.gain) {
-              left.gain = left.gain.filter((k) => k.t <= keep)
-              if (left.gain.length < 2) left.gain = undefined
+            if (left.kind === 'video' || left.kind === 'audio') {
+              if (left.gain) {
+                left.gain = left.gain.filter((k) => k.t <= keep)
+                if (left.gain.length < 2) left.gain = undefined
+              }
+              const lc = c as VideoClip | AudioClip
+              if (lc.speedCurve && lc.speedCurve.length > 1 && lc.duration > 0) {
+                left.speedCurve = sliceRamp(lc.speedCurve, 0, keep / lc.duration)
+              }
             }
             clips.push(left)
           }
@@ -275,7 +292,12 @@ export function rippleDeleteRange(p: Project, trackId: string, from: number, to:
             const cutIntoClip = to - c.start
             const right: Clip = { ...c, id: uid('clip'), start: from, duration: end - to }
             if (right.kind === 'video' || right.kind === 'audio') {
-              right.offset += cutIntoClip * right.speed
+              const rc = c as VideoClip | AudioClip
+              right.offset = sourceTimeAt(rc, cutIntoClip)
+              if (rc.speedCurve && rc.speedCurve.length > 1 && rc.duration > 0) {
+                const cut = cutIntoClip / rc.duration
+                right.speedCurve = sliceRamp(rc.speedCurve, cut, 1)
+              }
               if (right.gain) {
                 right.gain = right.gain.filter((k) => k.t >= cutIntoClip).map((k) => ({ ...k, t: k.t - cutIntoClip }))
                 if (right.gain.length < 2) right.gain = undefined
