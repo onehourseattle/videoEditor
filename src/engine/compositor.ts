@@ -27,12 +27,25 @@ export interface FrameProvider {
   getImage(assetId: string): CanvasImageSource | null
 }
 
-const scratchPool: HTMLCanvasElement[] = []
+/** Canvas that works on the main thread or inside a Worker. */
+export type AnyCanvas = HTMLCanvasElement | OffscreenCanvas
 
-function getScratch(w: number, h: number, i: number): HTMLCanvasElement {
+export function createCanvas(w: number, h: number): AnyCanvas {
+  if (typeof document !== 'undefined') {
+    const c = document.createElement('canvas')
+    c.width = w
+    c.height = h
+    return c
+  }
+  return new OffscreenCanvas(w, h)
+}
+
+const scratchPool: AnyCanvas[] = []
+
+function getScratch(w: number, h: number, i: number): AnyCanvas {
   let c = scratchPool[i]
   if (!c) {
-    c = document.createElement('canvas')
+    c = createCanvas(w, h)
     scratchPool[i] = c
   }
   if (c.width !== w || c.height !== h) {
@@ -201,13 +214,13 @@ function renderClipLayer(
   clip: Clip,
   t: number,
   frames: FrameProvider,
-  layer: HTMLCanvasElement,
+  layer: AnyCanvas,
   wallT: number,
   scale: number,
 ): CanvasImageSource | null {
   const { width: W, height: H } = project
   const local = t - clip.start
-  const ctx = layer.getContext('2d')!
+  const ctx = layer.getContext('2d') as CanvasRenderingContext2D
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.clearRect(0, 0, layer.width, layer.height)
   ctx.setTransform(scale, 0, 0, scale, 0, 0)

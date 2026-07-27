@@ -4,6 +4,8 @@ import { projectDuration } from '../types/model'
 import { renderFrame, clipSourceTime, type FrameProvider } from '../engine/compositor'
 import { scheduleAudio } from '../engine/audioGraph'
 import { assetStore } from '../state/assetStore'
+import { pickVideoCodec, pickAudioCodec, encodePcm } from './codecs'
+import { idb } from '../state/db'
 
 export interface ExportSettings {
   width: number
@@ -23,42 +25,22 @@ export interface ExportProgress {
 
 const AUDIO_SAMPLE_RATE = 48000
 
-type MuxVideoCodec = 'avc' | 'hevc' | 'vp9' | 'av1'
-
-/** First hardware/software codec this browser can actually encode, best first. */
-async function pickVideoCodec(s: ExportSettings): Promise<{ mux: MuxVideoCodec; codec: string }> {
-  const mbps = (s.width * s.height * s.fps) / 256
-  const avcLevel = mbps > 983040 ? '33' : '2a'
-  const candidates: { mux: MuxVideoCodec; codec: string }[] = [
-    { mux: 'avc', codec: `avc1.6400${avcLevel}` }, // H.264 High
-    { mux: 'avc', codec: `avc1.4200${avcLevel}` }, // H.264 Baseline
-    { mux: 'vp9', codec: 'vp09.00.41.08' },
-    { mux: 'av1', codec: 'av01.0.08M.08' },
-  ]
-  for (const c of candidates) {
-    try {
-      const res = await VideoEncoder.isConfigSupported({
-        codec: c.codec, width: s.width, height: s.height, bitrate: s.videoBitrate, framerate: s.fps,
-      })
-      if (res.supported) return c
-    } catch { /* try next */ }
+/**
+ * Render the whole mix offline. Must run on the main thread —
+ * `OfflineAudioContext` is not exposed to Workers.
+ */
+export async function renderAudioMix(project: Project, normalize: boolean): Promise<AudioBuffer | null> {
+  const duration = projectDuration(project)
+  if (duration <= 0) return null
+  const offline = new OfflineAudioContext(2, Math.ceil(duration * AUDIO_SAMPLE_RATE), AUDIO_SAMPLE_RATE)
+  await scheduleAudio(offline, offline.destination, project, 0, 0)
+  const buffer = await offline.startRendering()
+  if (normalize) {
+    const { normalizationGain, applyGain } = await import('../ai/audioPro')
+    const { gain } = normalizationGain(buffer, -14)
+    if (Math.abs(gain - 1) > 0.01) applyGain(buffer, gain)
   }
-  throw new Error('No supported video encoder found in this browser.')
-}
-
-async function pickAudioCodec(): Promise<{ mux: 'aac' | 'opus'; codec: string } | null> {
-  if (typeof AudioEncoder === 'undefined') return null
-  const candidates = [
-    { mux: 'aac' as const, codec: 'mp4a.40.2' },
-    { mux: 'opus' as const, codec: 'opus' },
-  ]
-  for (const c of candidates) {
-    try {
-      const res = await AudioEncoder.isConfigSupported({ codec: c.codec, sampleRate: AUDIO_SAMPLE_RATE, numberOfChannels: 2, bitrate: 192_000 })
-      if (res.supported) return c
-    } catch { /* try next */ }
-  }
-  return null
+  return buffer
 }
 
 /**
@@ -85,17 +67,10 @@ export async function exportProject(
 
   // ── audio mix (offline render) ──
   let audioBuffer: AudioBuffer | null = null
-  const audioCodec = settings.includeAudio ? await pickAudioCodec() : null
+  const audioCodec = settings.includeAudio ? await pickAudioCodec(AUDIO_SAMPLE_RATE) : null
   if (settings.includeAudio && audioCodec) {
     onProgress({ phase: 'audio', progress: 0 })
-    const offline = new OfflineAudioContext(2, Math.ceil(duration * AUDIO_SAMPLE_RATE), AUDIO_SAMPLE_RATE)
-    await scheduleAudio(offline, offline.destination, project, 0, 0)
-    audioBuffer = await offline.startRendering()
-    if (settings.normalizeAudio !== false) {
-      const { normalizationGain, applyGain } = await import('../ai/audioPro')
-      const { gain } = normalizationGain(audioBuffer, -14)
-      if (Math.abs(gain - 1) > 0.01) applyGain(audioBuffer, gain)
-    }
+    audioBuffer = await renderAudioMix(project, settings.normalizeAudio !== false)
     onProgress({ phase: 'audio', progress: 1 })
   }
 
@@ -164,7 +139,9 @@ export async function exportProject(
   // ── audio encode ──
   if (audioBuffer && audioCodec) {
     onProgress({ phase: 'muxing', progress: 0.2 })
-    await encodeAudio(audioBuffer, audioCodec.codec, (chunk, meta) => muxer.addAudioChunk(chunk, meta))
+    await encodePcm(channelsOf(audioBuffer), audioBuffer.sampleRate, audioCodec.codec, (chunk, meta) =>
+      muxer.addAudioChunk(chunk, meta),
+    )
   }
 
   onProgress({ phase: 'muxing', progress: 0.8 })
@@ -173,42 +150,92 @@ export async function exportProject(
   return new Blob([target.buffer], { type: 'video/mp4' })
 }
 
-async function encodeAudio(
-  buffer: AudioBuffer,
-  codec: string,
-  emit: (chunk: EncodedAudioChunk, meta?: EncodedAudioChunkMetadata) => void,
-) {
-  let err: Error | null = null
-  const encoder = new AudioEncoder({
-    output: emit,
-    error: (e) => { err = e instanceof Error ? e : new Error(String(e)) },
-  })
-  encoder.configure({ codec, sampleRate: buffer.sampleRate, numberOfChannels: 2, bitrate: 192_000 })
-
-  const chunkFrames = 4800 // 0.1s per AudioData
+function channelsOf(buffer: AudioBuffer): Float32Array[] {
   const left = buffer.getChannelData(0)
   const right = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : left
-  for (let offset = 0; offset < buffer.length; offset += chunkFrames) {
-    if (err) throw err
-    const n = Math.min(chunkFrames, buffer.length - offset)
-    const interleaved = new Float32Array(n * 2)
-    for (let i = 0; i < n; i++) {
-      interleaved[i * 2] = left[offset + i]
-      interleaved[i * 2 + 1] = right[offset + i]
-    }
-    const data = new AudioData({
-      format: 'f32',
-      sampleRate: buffer.sampleRate,
-      numberOfFrames: n,
-      numberOfChannels: 2,
-      timestamp: Math.round((offset / buffer.sampleRate) * 1e6),
-      data: interleaved,
-    })
-    encoder.encode(data)
-    data.close()
+  return [left, right]
+}
+
+/**
+ * Export with the frame loop in a Worker, so a long render doesn't compete
+ * with the editor for the main thread. Audio is mixed here (Web Audio is
+ * main-thread only) and its PCM transferred in. Rejects when the Worker can't
+ * handle the media — callers fall back to `exportProject`, which has the
+ * seek-based decode path.
+ */
+export async function exportProjectInWorker(
+  project: Project,
+  settings: ExportSettings,
+  onProgress: (p: ExportProgress) => void,
+  signal?: { cancelled: boolean },
+): Promise<Blob> {
+  if (typeof Worker === 'undefined' || typeof OffscreenCanvas === 'undefined') {
+    throw new Error('Worker export unavailable')
   }
-  await encoder.flush()
-  encoder.close()
+  const duration = projectDuration(project)
+  if (duration <= 0) throw new Error('Project is empty — add clips to the timeline first.')
+
+  // audio first, on this thread
+  let audio: { channels: Float32Array[]; sampleRate: number } | null = null
+  if (settings.includeAudio) {
+    onProgress({ phase: 'audio', progress: 0 })
+    const buffer = await renderAudioMix(project, settings.normalizeAudio !== false)
+    if (buffer) {
+      const [l, r] = channelsOf(buffer)
+      audio = { channels: [new Float32Array(l), new Float32Array(r)], sampleRate: buffer.sampleRate }
+    }
+    onProgress({ phase: 'audio', progress: 1 })
+  }
+
+  // media blobs (structured-cloned by reference) + imported fonts
+  const blobs: Record<string, Blob> = {}
+  for (const asset of Object.values(project.assets)) {
+    const blob = assetStore.getBlob(asset.id) ?? (await idb.get<Blob>('blobs', asset.id))
+    if (blob) blobs[asset.id] = blob
+  }
+  const storedFonts = await idb.getAll<{ family: string; data: ArrayBuffer }>('fonts')
+
+  const worker = new Worker(new URL('./exportWorker.ts', import.meta.url), { type: 'module' })
+  try {
+    return await new Promise<Blob>((resolve, reject) => {
+      const onCancel = setInterval(() => {
+        if (signal?.cancelled) worker.postMessage({ type: 'cancel' })
+      }, 250)
+      worker.onmessage = (e: MessageEvent) => {
+        const msg = e.data
+        if (msg.type === 'progress') {
+          onProgress({ phase: msg.phase, progress: msg.progress })
+        } else if (msg.type === 'done') {
+          clearInterval(onCancel)
+          onProgress({ phase: 'done', progress: 1 })
+          resolve(new Blob([msg.buffer], { type: 'video/mp4' }))
+        } else if (msg.type === 'error') {
+          clearInterval(onCancel)
+          reject(new Error(msg.message))
+        }
+      }
+      worker.onerror = (e) => {
+        clearInterval(onCancel)
+        reject(new Error(e.message || 'Export worker failed'))
+      }
+      const transfers: Transferable[] = audio ? audio.channels.map((c) => c.buffer) : []
+      worker.postMessage(
+        {
+          project,
+          settings: {
+            width: settings.width, height: settings.height, fps: settings.fps,
+            videoBitrate: settings.videoBitrate, includeAudio: settings.includeAudio,
+          },
+          blobs,
+          fonts: storedFonts,
+          audio,
+        },
+        transfers,
+      )
+    })
+  } finally {
+    worker.terminate()
+  }
 }
 
 // ─── frame provider ──────────────────────────────────────────────────────────

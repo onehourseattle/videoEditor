@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { Project } from '../types/model'
-import { exportProject, type ExportSettings, type ExportProgress } from './exporter'
+import { exportProject, exportProjectInWorker, type ExportSettings, type ExportProgress } from './exporter'
 import { uid } from '../utils/id'
 import { useEditor } from '../state/store'
 
@@ -39,12 +39,16 @@ async function pump() {
       if (!job) break
       patch(job.id, { status: 'running' })
       try {
-        const blob = await exportProject(
-          job.project,
-          job.settings,
-          (progress) => patch(job.id, { progress }),
-          job.cancelSignal,
-        )
+        const onProgress = (progress: ExportProgress) => patch(job.id, { progress })
+        // Worker keeps the editor smooth; main thread is the fallback for
+        // media it can't demux (it has the seek-based decode path).
+        let blob: Blob
+        try {
+          blob = await exportProjectInWorker(job.project, job.settings, onProgress, job.cancelSignal)
+        } catch (workerErr) {
+          if (job.cancelSignal.cancelled) throw workerErr
+          blob = await exportProject(job.project, job.settings, onProgress, job.cancelSignal)
+        }
         const url = URL.createObjectURL(blob)
         patch(job.id, { status: 'done', url, size: blob.size, progress: { phase: 'done', progress: 1 } })
         autoDownload(url, job.label)

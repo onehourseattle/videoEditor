@@ -126,9 +126,10 @@ function grain(ctx: CanvasRenderingContext2D, w: number, h: number, amount: numb
 function pixelate(ctx: CanvasRenderingContext2D, w: number, h: number, size: number) {
   const sw = Math.max(1, Math.floor(w / size))
   const sh = Math.max(1, Math.floor(h / size))
-  const tmp = document.createElement('canvas')
-  tmp.width = sw; tmp.height = sh
-  const tctx = tmp.getContext('2d')!
+  const tmp = typeof document !== 'undefined'
+    ? Object.assign(document.createElement('canvas'), { width: sw, height: sh })
+    : new OffscreenCanvas(sw, sh)
+  const tctx = tmp.getContext('2d') as CanvasRenderingContext2D
   tctx.imageSmoothingEnabled = false
   tctx.drawImage(ctx.canvas, 0, 0, sw, sh)
   ctx.imageSmoothingEnabled = false

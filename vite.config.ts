@@ -21,6 +21,10 @@ export default defineConfig({
     target: 'es2022',
     chunkSizeWarningLimit: 4096,
   },
+  // the export worker code-splits (dynamic mediabunny import), which IIFE can't do
+  worker: {
+    format: 'es',
+  },
   optimizeDeps: {
     exclude: ['@huggingface/transformers'],
   },
