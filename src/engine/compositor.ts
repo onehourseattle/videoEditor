@@ -166,7 +166,7 @@ function drawPersonMatte(
   // mirror the video clip's transform + filters so the cutout sits exactly on itself
   const local = t - vc.start
   const layer = getScratch(sw(W, scale), sw(H, scale), counter.i++)
-  const lctx = layer.getContext('2d')!
+  const lctx = layer.getContext('2d') as CanvasRenderingContext2D
   lctx.setTransform(1, 0, 0, 1, 0, 0)
   lctx.clearRect(0, 0, layer.width, layer.height)
   lctx.setTransform(scale, 0, 0, scale, 0, 0)
