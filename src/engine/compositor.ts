@@ -1,6 +1,7 @@
 import type { Clip, Project, StickerClip, Track, VideoClip } from '../types/model'
 import { sampleKeyframes } from './keyframes'
 import { filterString, hasPixelEffects, applyPixelEffects } from './effects'
+import { applyPixelEffectsGPU } from './glEffects'
 import { drawTransition } from './transitions'
 import { drawCaptionClip, drawTextClip } from './textRenderer'
 import { drawChartClip } from './chartRenderer'
@@ -203,7 +204,7 @@ function renderClipLayer(
   layer: HTMLCanvasElement,
   wallT: number,
   scale: number,
-): HTMLCanvasElement | null {
+): CanvasImageSource | null {
   const { width: W, height: H } = project
   const local = t - clip.start
   const ctx = layer.getContext('2d')!
@@ -258,7 +259,12 @@ function renderClipLayer(
   }
   ctx.restore()
 
-  if (hasPixelEffects(clip.effects)) applyPixelEffects(layer, clip.effects, wallT)
+  if (hasPixelEffects(clip.effects)) {
+    // GPU chain covers every per-pixel effect; CPU stays authoritative fallback
+    const gpu = applyPixelEffectsGPU(layer, clip.effects, wallT)
+    if (gpu) return gpu
+    applyPixelEffects(layer, clip.effects, wallT)
+  }
   return layer
 }
 
