@@ -485,6 +485,21 @@ button:active:not(:disabled) { transform: scale(0.97); }
   background: var(--bg-panel); border: 1px solid var(--border); border-radius: 12px;
   padding: 20px; width: 460px; max-width: 92vw; display: flex; flex-direction: column; gap: 14px;
   box-shadow: 0 20px 80px var(--shadow);
+  /* never taller than the screen — otherwise the action row scrolls out of
+     reach on a phone and the dialog can't be completed at all */
+  max-height: min(88vh, 100% - 32px); overflow-y: auto;
+}
+/* In a scrolling column flex box, children shrink by default — which squeezed
+   the action row until its buttons sat outside the visible box and couldn't be
+   tapped. Keep natural heights and let the modal scroll instead. */
+.modal > * { flex: 0 0 auto; }
+/* Every modal ends with its action row. Pin it to the bottom of the scroll box
+   so the primary action is reachable however tall the content grows — on a
+   phone the export dialog otherwise pushed its own buttons out of reach. */
+.modal > div:last-child {
+  position: sticky; bottom: 0; z-index: 1;
+  background: var(--bg-panel);
+  padding-top: 10px;
 }
 .modal h2 { font-size: 16px; }
 .progress-bar { height: 8px; background: var(--bg); border-radius: 4px; overflow: hidden; }
@@ -492,12 +507,28 @@ button:active:not(:disabled) { transform: scale(0.97); }
 
 /* ── small screens (iPhone / iPad portrait) ─────────────────────────────── */
 @media (max-width: 900px) {
+  :root { --timeline-h: 240px; }
   /* iOS zooms into inputs under 16px — keep them at 16px on touch screens */
   input, select, textarea { font-size: 16px; }
 
+  /* thumbs need ~44px; the topbar already wraps, so let it grow */
+  .topbar button, .transport button, .modal button {
+    min-height: 44px; min-width: 44px;
+  }
+  /* Action rows are laid out for a wide dialog; on a phone they ran past the
+     screen edge and pushed the primary button out of reach. Wrap and fill. */
+  .modal > div:last-child { flex-wrap: wrap; }
+  .modal > div:last-child button { flex: 1 1 auto; }
+  .modal > div:last-child > div { display: none; } /* the desktop spacer */
+  .topbar button.ghost { padding-left: 10px; padding-right: 10px; }
+
   .topbar { flex-wrap: wrap; padding: 6px 8px; gap: 6px; }
-  .topbar input.project-name { width: 110px; }
+  .topbar input.project-name { width: 110px; flex: 1 1 90px; min-width: 0; }
   .topbar select { max-width: 130px; }
+  /* On a phone the topbar was three wrapped rows deep. Projects already covers
+     opening and saving, so the file buttons and the logo give up their space. */
+  .topbar .logo { display: none; }
+  .topbar button[title^="Import a"], .topbar button[title^="Export project"] { display: none; }
 
   /* side panel becomes a drawer over the preview; tap the active tab to close */
   .panel {
@@ -507,15 +538,24 @@ button:active:not(:disabled) { transform: scale(0.97); }
   }
   .main { position: relative; }
 
-  /* inspector overlays from the right only while a clip is selected */
+  /* Inspector overlays from the right while a clip is selected — but it must
+     stop above the timeline, or selecting a clip would cover the very thing
+     you selected it to edit (no dragging, trimming or splitting by thumb). */
   .inspector {
-    position: absolute; right: 0; top: 0; bottom: 0; z-index: 29;
+    position: absolute; right: 0; top: 0; bottom: var(--timeline-h); z-index: 29;
     width: min(280px, 80vw);
     box-shadow: -12px 0 40px rgba(0, 0, 0, 0.5);
   }
   .inspector.empty { display: none; }
 
-  .timeline { height: 240px; }
+  .timeline { height: var(--timeline-h); min-width: 0; }
+  /* The toolbar is a long single row; without this its min-content width
+     forces the whole layout viewport wider than the phone, and Safari/Chrome
+     respond by zooming the entire UI out. Let it scroll instead. */
+  .timeline-toolbar { overflow-x: auto; scrollbar-width: none; }
+  .timeline-toolbar::-webkit-scrollbar { display: none; }
+  .timeline-toolbar > * { flex: 0 0 auto; }
+  .center, .timeline-scroll, .track-lane { min-width: 0; }
   :root { --track-h: 44px; }
   .track-head { width: 86px; font-size: 10px; }
   .track-head .name { display: none; }
